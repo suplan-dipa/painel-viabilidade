@@ -169,6 +169,8 @@
       <div class="row" id="rowAMIS"><label>% AMIS (do valor do terreno)</label><input id="pAMIS" type="number" step="0.05" value="0.5"></div>
       <div class="row"><label>ITBI (%)</label><input id="pITBI" type="number" step="0.005" value="0.03"></div>
       <div class="row"><label>% fachada ativa (do terreno)</label><input id="faPct" type="number" step="0.05" value="0.8"></div>
+      <div class="row" id="rowAFP"><label>Área de fruição pública – AFP (m²)</label><input id="AFP" type="number" step="1" value="0"></div>
+      <div class="row" id="rowFatorAFP"><label>Fator de qualificação AFP (m² isentos/m² AFP)</label><input id="fatorAFP" type="number" step="0.1" value="1.5"></div>
     </div></div>
   </div>
 
@@ -384,8 +386,13 @@ function compute(){
   const caOnerosa = Math.max(0, Math.min(caPrat,p.caApl) - CAbas);
   const onerav = caOnerosa*AT;
   const pTDC=num('pTDC'); const tdcArea=pTDC*onerav;
-  const pAFP = (areaNum===1)?0.2:0;
-  const isenta = p.adere ? AT*(pAFP+(emOp3cr?p.faPct:0)) : AT*pAFP;
+  // AFP: área isentada de ODC
+  // Não adere / Lei 11.181: sem AFP (pAFP hardcoded = 0)
+  // Adere OUS: AFP em m² parametrizado; qualificada → isenta fator×AFP de área onerável
+  const AFP_m2 = p.adere ? num('AFP') : 0;
+  const fatorAFP = p.adere ? Math.max(0, num('fatorAFP')) : 0;
+  const isentaAFP = AFP_m2 * fatorAFP;                 // m² de área onerável isentados pela AFP
+  const isenta = isentaAFP;
   const odcArea=Math.max(0,Math.min(0.9*onerav, onerav-tdcArea-isenta));
   const VL = emOp3cr?0.25:0.5;
   const odcCheia=VL*odcArea*V;
@@ -598,7 +605,7 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape') modal.classList.re
 
 // ---- modo Lei 11.181/2019  x  OUS Somos Centro ----
 let lastOus="OUS – Subárea 1A";
-const OUS_ONLY=['rowCenario','rowTipo','rowSupUR','rowFundo','rowVUR','rowAMIS'];
+const OUS_ONLY=['rowCenario','rowTipo','rowSupUR','rowFundo','rowVUR','rowAMIS','rowAFP','rowFatorAFP'];
 const ALL_HIDE=[...OUS_ONLY,'rowPrazo','rowRegime'];
 
 function updateVisibility(){
@@ -611,7 +618,7 @@ function updateVisibility(){
     ALL_HIDE.forEach(id=>{const el=$(id);if(el)el.style.display='none';});
   } else if(naoadere){
     // (4) Não adere: oculta prazo, tipo, supUR, fundo, vUR, AMIS
-    ['rowPrazo','rowTipo','rowSupUR','rowFundo','rowVUR','rowAMIS'].forEach(id=>{
+    ['rowPrazo','rowTipo','rowSupUR','rowFundo','rowVUR','rowAMIS','rowAFP','rowFatorAFP'].forEach(id=>{
       const el=$(id);if(el)el.style.display='none';
     });
   }
