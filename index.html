@@ -164,11 +164,11 @@
     </div></div>
 
     <div class="sec"><h3>Fluxo de caixa &amp; financiamento</h3><div class="body">
-      <div class="row"><label>Momento do desembolso AMIS</label>
+      <div class="row" id="rowAmisMom"><label>Momento do desembolso AMIS</label>
         <select id="amisMom"><option value="7">Aprovação (mês 7)</option><option value="1">Exame (mês 1)</option><option value="55">Baixa (mês 55)</option></select></div>
-      <div class="row"><label>Parcelamento AMIS</label>
+      <div class="row" id="rowAmisParc"><label>Parcelamento AMIS</label>
         <select id="amisParc"><option value="1">À vista −30%</option><option value="12">12x</option><option value="24">24x</option><option value="36">36x</option><option value="48">48x</option><option value="60">60x</option></select></div>
-      <div class="hint">Desconto de 30% só no à vista em Aprovação/Exame. Na Baixa: à vista integral, sem desconto.</div>
+      <div class="hint" id="hintAmis">Desconto de 30% só no à vista em Aprovação/Exame. Na Baixa: à vista integral, sem desconto.</div>
       <div class="row"><label>% obra financiada</label><input id="finPct" type="number" step="5" value="50" min="0" max="90"></div>
       <div class="row"><label>Juros financiamento (% a.m.)</label><input id="jFin" type="number" step="0.1" value="1.2"></div>
       <div class="row"><label>TMA (% a.a.)</label><input id="tma" type="number" step="0.5" value="12"></div>
@@ -258,9 +258,9 @@ const ZONES = {
 const TIPO_INTERESSE = [6500,5955,4764]; // tipo index 1
 const TIPOS = ["1 - Retrofit e reconversão","2 - Empreendimento de interesse social","3 - Finalização de obra abandonada",
   "4 - Substituição de estacionamento subutilizado","5 - Substituição de galpão subutilizado",
-  "6 - Edificação em Subárea 1B","7 - Substituição de edificação horizontal"];
-// Anexo III — FR [≤2, 2-4, 4-6]
-const FR = {0:[1.0,0.8,0.6],1:[1.0,1.0,1.0],2:[0.5,0.4,0.3],3:[0.5,0.4,0.3],4:[0.5,0.4,0.3],5:[0.6,0.6,0.6],6:[0.5,0.4,0.3]};
+  "6 - Edificação em Subárea 1B","7 - Substituição de edificação horizontal","Não Incentivado"];
+// Anexo III — FR [≤2, 2-4, 4-6]. Não Incentivado (índice 7) não gera UR → FR=0.
+const FR = {0:[1.0,0.8,0.6],1:[1.0,1.0,1.0],2:[0.5,0.4,0.3],3:[0.5,0.4,0.3],4:[0.5,0.4,0.3],5:[0.6,0.6,0.6],6:[0.5,0.4,0.3],7:[0,0,0]};
 // Anexo V — isenção ODC [Área1/Área2][≤2,2-4,4-6]
 const ANEXOV = {1:[0.75,0.5,0.0],2:[0.5,0.25,0.0]};
 const PRAZO_IDX = {"Até 2 anos":0,"Após 2 e até 4 anos":1,"Após 4 e até 6 anos":2};
@@ -495,22 +495,31 @@ function compute(){
   const odc = p.adere ? odcCheia*(1-isencao)*(odcAvista?0.7:1) : odcCheia*(odcAvista?0.7:1);
   const tdc = (tdcArea*V/1000)*num('precoUTDC');
   const FRv = FR[+$('tipo').value][prazoI];
-  const AGT = p.adere ? (p.caApl*AT)*FRv : 0;
+  // Área geradora de UR (subáreas 1A/1B): função da ÁREA CONSTRUÍDA real, não do potencial teórico.
+  // Fórmula do PL: área líquida construída (= área bruta / 1,7) × Fator de Redução (Anexo III).
+  const areaLiquida = gross / p.fBruta;            // gross/1,7 = área líquida efetivamente construída
+  const AGT = p.adere ? areaLiquida*FRv : 0;
   const vUR=num('vUR');
   const urRec = (areaNum===1) ? (AGT*V/1000)*vUR : 0;
   const caSuper = Math.max(0, Math.min(caPrat, p.caEfetivo*(1+p.supUR)) - p.caEfetivo);
   const AER = caSuper*AT;
   const urDesp = (areaNum===2) ? (AER*V/1000)*vUR*(1+(num('pFundo')/100)) : 0;
-  // (6) AMIS: regras por cenário
+  // ---- AMIS: regras por cenário e por tipo de empreendimento ----
+  // Regra central (subáreas 1A/1B): incentivados são SEMPRE geradores de UR e NUNCA pagam AMIS.
+  //   Só o "Não Incentivado" paga AMIS, e apenas se não superar o mínimo (supUR < 21%).
+  const naoIncentivado = (+$('tipo').value === 7);   // índice 7 = "Não Incentivado"
   let usarAMIS;
   if(cen==="Não adere"){
     usarAMIS=false;
   } else if(fora){
     const limFora = emOp3cr ? 0.5*0.2 : 0.5*0.1;
     usarAMIS = p.supUR < limFora;
-  } else {
-    // Subáreas 1A/1B/Área 2
+  } else if(areaNum===2){
+    // Área 2: lote receptor de UR — mantém a regra de mínimo original
     usarAMIS = p.supUR < 0.3*0.7;
+  } else {
+    // Subáreas 1A/1B: só Não Incentivado paga, e só se não superar o mínimo (< 21%)
+    usarAMIS = naoIncentivado && (p.supUR < 0.3*0.7);
   }
   const amis = (p.adere && usarAMIS) ? (num('pAMIS')/100)*V*AT : 0;
   const isentoITBI = (areaNum===1);
@@ -645,6 +654,9 @@ function cashflow(x){
 
 // ============ RENDER ============
 function render(p,G,r){
+  // controles de AMIS: ocultos quando o empreendimento não paga AMIS
+  const amisRows=['rowAmisMom','rowAmisParc','hintAmis','rowAMIS'];
+  amisRows.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display=r.pagaAMIS?(id==='hintAmis'?'block':'flex'):'none';});
   // KPIs
   const kpis=[
     ['Área construída',fmtM(r.constr),''],
@@ -927,6 +939,7 @@ function updateVisibility(){
   const lei=document.querySelector('.modeSel .mode[data-mode="lei"]').classList.contains('active');
   const naoadere=$('cenario').value==="Não adere";
   const fora=$('cenario').value==="Fora do perímetro";
+  const area2=$('cenario').value==="OUS – Área 2";
   // reset tudo visível
   ALL_HIDE.forEach(id=>{const el=$(id);if(el)el.style.display='flex';});
   if(lei){
@@ -938,6 +951,11 @@ function updateVisibility(){
   } else if(fora){
     // Fora do perímetro: oculta prazo e tipo (sem FR nem isenção de prazo)
     ['rowPrazo','rowTipo'].forEach(id=>{
+      const el=$(id);if(el)el.style.display='none';
+    });
+  } else if(area2){
+    // Área 2: lote é receptor de UR (não gerador), então o FR do Anexo III não se aplica
+    ['rowTipo'].forEach(id=>{
       const el=$(id);if(el)el.style.display='none';
     });
   }
