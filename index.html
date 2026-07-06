@@ -160,7 +160,19 @@
       <div class="row"><label>BDI (%)</label><input id="BDI" type="number" step="1" value="25"></div>
       <div class="row"><label>Preço apto (R$/m² privativo)</label><input id="pApto" type="number" step="100" value="12000"></div>
       <div class="row"><label>Preço comercial (R$/m²)</label><input id="pCom" type="number" step="100" value="10000"></div>
-      <div class="row"><label>ODC à vista (−30%)?</label><select id="odcDesc"><option>Sim</option><option>Não</option></select></div>
+      <div class="row"><label>Pagamento ODC</label><select id="odcPag"><option>À vista −30%</option><option>Parcelado 36x</option></select></div>
+    </div></div>
+
+    <div class="sec"><h3>Fluxo de caixa &amp; financiamento</h3><div class="body">
+      <div class="row"><label>Momento do desembolso AMIS</label>
+        <select id="amisMom"><option value="7">Aprovação (mês 7)</option><option value="1">Exame (mês 1)</option><option value="55">Baixa (mês 55)</option></select></div>
+      <div class="row"><label>Parcelamento AMIS</label>
+        <select id="amisParc"><option value="1">À vista −30%</option><option value="12">12x</option><option value="24">24x</option><option value="36">36x</option><option value="48">48x</option><option value="60">60x</option></select></div>
+      <div class="hint">Desconto de 30% só no à vista em Aprovação/Exame. Na Baixa: à vista integral, sem desconto.</div>
+      <div class="row"><label>% obra financiada</label><input id="finPct" type="number" step="5" value="50" min="0" max="90"></div>
+      <div class="row"><label>Juros financiamento (% a.m.)</label><input id="jFin" type="number" step="0.1" value="1.2"></div>
+      <div class="row"><label>TMA (% a.a.)</label><input id="tma" type="number" step="0.5" value="12"></div>
+      <div class="hint">Cronograma: terreno+ITBI mês 1 · projetos mês 6 · obra meses 7–55 · vendas 20% pré (m4–30), 30% durante (m7–55), 50% na baixa (m55) · UR: 25% m6, 25% m7, 50% m55 · quitação do financiamento na baixa.</div>
     </div></div>
 
     <div class="sec"><h3>Custos &amp; contrapartidas (avançado)</h3><div class="body">
@@ -199,6 +211,13 @@
         <div class="floors" id="floorsBox"></div>
       </div>
     </div>
+
+    <!-- ============ FLUXO DE CAIXA MENSAL ============ -->
+    <div class="kpis" id="kpisFlow" style="margin-top:12px"></div>
+    <div class="viz" style="margin-top:0;min-height:300px">
+      <canvas id="cvFlow" width="1200" height="290"></canvas>
+      <div class="leg" id="legFlow" style="bottom:8px"></div>
+    </div>
   </div>
 </div>
 
@@ -207,7 +226,7 @@
     <button class="modal-x" id="modalX">&times;</button>
     <h2>OUS Somos Centro — <span class="hl">Visualizador de Envelopes Construtivos</span></h2>
     <p>Esta plataforma tem caráter <b>experimental e didático</b>, desenvolvida como instrumento de apoio à análise urbanística no contexto do Projeto de Lei nº 574/2025 (OUS Somos Centro), em tramitação na Câmara Municipal de Belo Horizonte.</p>
-    <p>O visualizador permite estimar envelopes construtivos tridimensionais, potenciais de aproveitamento e fluxos de Unidades de Regeneração (UR) para lotes do Cadastro Técnico Municipal (CTM), com base nos parâmetros urbanísticos da Lei Municipal nº 11.181/2019 e nas disposições previstas no substitutivo ao PL 574/2025.</p>
+    <p>O visualizador permite estimar envelopes construtivos tridimensionais, potenciais de aproveitamento, fluxos de Unidades de Regeneração (UR) e a <b>viabilidade econômico-financeira</b> — fluxo de caixa mensal, VPL e TIR do projeto e do equity, exposição de capital e payback — para lotes do Cadastro Técnico Municipal (CTM), com base nos parâmetros urbanísticos da Lei Municipal nº 11.181/2019 e nas disposições previstas no substitutivo ao PL 574/2025.</p>
     <div class="modal-warn">&#9888; As informações aqui apresentadas são estimativas geradas automaticamente a partir de dados cadastrais e não substituem a análise técnica oficial. A Prefeitura de Belo Horizonte não se responsabiliza por divergências entre os resultados desta ferramenta e as manifestações dos órgãos competentes em processos de licenciamento urbanístico.</div>
     <div class="modal-dev">
       <div class="lbl">Desenvolvimento</div>
@@ -472,8 +491,8 @@ function compute(){
   const odcCheia=VL*odcArea*V;
   const prazoI=PRAZO_IDX[$('prazo').value];
   const isencao = (p.adere && !fora && ANEXOV[areaNum]) ? ANEXOV[areaNum][prazoI] : 0;
-  const descV = $('odcDesc').value==="Sim";
-  const odc = p.adere ? odcCheia*(1-isencao)*(descV?0.7:1) : odcCheia*(descV?0.7:1);
+  const odcAvista = $('odcPag').value.indexOf('vista')>=0;   // À vista −30% | Parcelado 36x integral
+  const odc = p.adere ? odcCheia*(1-isencao)*(odcAvista?0.7:1) : odcCheia*(odcAvista?0.7:1);
   const tdc = (tdcArea*V/1000)*num('precoUTDC');
   const FRv = FR[+$('tipo').value][prazoI];
   const AGT = p.adere ? (p.caApl*AT)*FRv : 0;
@@ -515,13 +534,113 @@ function compute(){
   const margem=vgvDisp?lucro/vgvDisp:0;
   const custoM2=constr?custoTot/constr:0;
 
+  // ---- FLUXO DE CAIXA MENSAL (mesma lógica do motor Python) ----
+  const flow = cashflow({
+    cTer, itbi, cProj, cAdm, odc, tdc, urDesp, amis, urRec,
+    cObra, cComm, cMkt, cImp, vgvDisp,
+    amisMom:+$('amisMom').value, amisParc:+$('amisParc').value,
+    odcAvista, finPct:num('finPct')/100, jFin:num('jFin')/100, tmaAA:num('tma')/100
+  });
+
   render(p,G,{gross,base,caPrat,vendResid,vendCom,constr,
+    flow,
     onerav,odcArea,odc,tdc,urRec,urDesp,amis,itbi,
     vgvR,vgvC,vgvBruto,vgvDisp,cObra,cObraR,cObraC,cTer,cProj,cAdm,cComm,cMkt,cImp,
     custoTot,lucro,margem,custoM2,permuta,valTer,areaNum,fora,adere:p.adere,bindingCA:G.bindingCA,
     nFloors:G.floors.length,altura:G.floors.length*p.peDir,caApl:p.caApl,emOp3cr,bindingAlt:G.bindingAlt,
     isGenUR:areaNum===1&&p.adere,isRecUR:areaNum===2&&p.adere,pagaAMIS:p.adere&&usarAMIS&&amis>0,
     arbStep:num('arbStep'),adereOUS:p.adere,testada:p.testada});
+}
+
+// ============ FLUXO DE CAIXA MENSAL ============
+// Reproduz o cronograma do motor Python (motor_vetorizado_OUS.py):
+//   terreno+ITBI mês 1 · projetos mês 6 · obra meses 7–55 · vendas 20% pré(4–30),
+//   30% durante(7–55), 50% baixa(55) · UR 25% m6, 25% m7, 50% m55 · quitação na baixa.
+const MESES_F = 67;                         // m0..m66 (cabe AMIS 60x a partir do mês 7)
+const AE=1, AF=6, AG=7, AH=48, BR=AG+AH;    // baixa = mês 55
+const AI=4, AJ=30;                          // janela de pré-vendas
+const AP=0.20, AQ=0.30, ARr=0.50;           // frações de venda: pré / durante / baixa
+
+function _spread(arr, lo, hi, val){ const span=Math.max(hi-lo+1,1); for(let m=lo;m<=hi&&m<MESES_F;m++) arr[m]+=val/span; }
+function _point(arr, m, val){ if(m>=0&&m<MESES_F) arr[m]+=val; }
+
+// TIR mensal robusta (bissecção no cruzamento descendente do VPL). Retorna a.a. ou null.
+function _irr(cf){
+  const M=cf.length, sum=cf.reduce((a,b)=>a+b,0);
+  const npv=r=>{let s=0;for(let t=0;t<M;t++)s+=cf[t]/Math.pow(1+r,t);return s;};
+  const lo=-0.99, hi=0.5, N=400, grid=[];
+  for(let j=0;j<=N;j++) grid.push(lo+(hi-lo)*j/N);
+  let best=null, bestDist=1e9;
+  const tmaM=Math.pow(1.12,1/12)-1;
+  for(let j=0;j<N;j++){
+    const a=npv(grid[j]), b=npv(grid[j+1]);
+    if(isFinite(a)&&isFinite(b)&&a>0&&b<0){          // cruzamento descendente = TIR válida
+      let x0=grid[j], x1=grid[j+1];
+      for(let k=0;k<90;k++){const xm=(x0+x1)/2; (npv(xm)>0)?x0=xm:x1=xm;}
+      const root=(x0+x1)/2, d=Math.abs(root-tmaM);
+      if(d<bestDist){bestDist=d;best=root;}
+    }
+  }
+  if(best===null) return null;
+  // coerência com VPL(0): lucra→TIR>0, destrói→TIR<0
+  if((sum>=0)!==(best>=0)) return null;
+  return Math.pow(1+best,12)-1;
+}
+
+function cashflow(x){
+  const PF=new Array(MESES_F).fill(0);      // fluxo do PROJETO (sem financiamento)
+  // ---- entradas ----
+  const CT = x.cTer + x.itbi;               // caixa de terreno + ITBI (mês 1)
+  _spread(PF, AI, AJ, AP*x.vgvDisp);        // pré-vendas
+  _spread(PF, AG, BR, AQ*x.vgvDisp);        // vendas durante a obra
+  _point (PF, BR, ARr*x.vgvDisp);           // vendas na baixa
+  // UR (Área 1): receita
+  _point(PF, AF, 0.25*x.urRec); _point(PF, AG, 0.25*x.urRec); _point(PF, BR, 0.50*x.urRec);
+  // ---- saídas ----
+  _point (PF, AE, -CT);                                      // terreno+ITBI mês 1
+  _spread(PF, AG, BR, -x.cObra);                            // obra distribuída 7–55
+  _point (PF, AF, -x.cProj);                                // projetos mês 6
+  _point (PF, AF, -0.1*x.cAdm); _point(PF, AG, -0.9*x.cAdm);// administração
+  _point (PF, AF, -x.tdc);                                  // TDC mês 6
+  _point (PF, AG, -x.urDesp);                               // UR-despesa (Área 2) início obra
+  // ODC: à vista no mês 7, ou parcelado 36x a partir do mês 7
+  if(x.odcAvista) _point(PF, AG, -x.odc); else _spread(PF, AG, AG+35, -x.odc);
+  // AMIS: momento (1/7/55) × parcelas (1..60)
+  _spread(PF, x.amisMom, x.amisMom + x.amisParc - 1, -x.amis);
+  // comercialização, marketing, impostos — acompanham as vendas (pré + durante)
+  _spread(PF, AI, AJ, -(x.cComm+x.cMkt+x.cImp));
+
+  const PC=[]; let acc=0; for(let m=0;m<MESES_F;m++){acc+=PF[m];PC.push(acc);}
+
+  // ---- financiamento + equity (recorrência mensal) ----
+  const draw=new Array(MESES_F).fill(0);
+  const totFin=x.finPct*x.cObra;                            // financia % da obra
+  for(let m=AG;m<=BR&&m<MESES_F;m++) draw[m]=totFin/(BR-AG+1);
+  const EF=new Array(MESES_F).fill(0); let prev=0;
+  for(let m=0;m<MESES_F;m++){
+    const interest = m>=1 ? prev*x.jFin : 0;
+    const pre = prev + draw[m] + interest;
+    const payoff = (m===BR) ? pre : 0;
+    EF[m] = PF[m] + draw[m] - interest - payoff;            // fluxo do EQUITY
+    prev = pre - payoff;
+  }
+  const EC=[]; acc=0; for(let m=0;m<MESES_F;m++){acc+=EF[m];EC.push(acc);}
+
+  // ---- indicadores ----
+  const tmaM=Math.pow(1+x.tmaAA,1/12)-1;
+  const disc=t=>Math.pow(1+tmaM,t);
+  let vplProj=0, vplEq=0;
+  for(let t=0;t<MESES_F;t++){vplProj+=PF[t]/disc(t); vplEq+=EF[t]/disc(t);}
+  const expProj=-Math.min(0,...PC);                         // exposição de caixa (projeto)
+  const expEq=-Math.min(0,...EC);                           // exposição de equity
+  // payback = último mês em que o acumulado passa de negativo para positivo e assim permanece
+  let paybackEq=null;
+  for(let m=1;m<MESES_F;m++){ if(EC[m-1]<0 && EC[m]>=0) paybackEq=m; }
+  if(EC[MESES_F-1]<0) paybackEq=null;                       // nunca recupera
+  const tirProj=_irr(PF), tirEq=_irr(EF);
+
+  return {PF,PC,EF,EC,vplProj,vplEq,expProj,expEq,
+          paybackEq:paybackEq<0?null:paybackEq,tirProj,tirEq,MESES:MESES_F,BR};
 }
 
 // ============ RENDER ============
@@ -580,6 +699,68 @@ function render(p,G,r){
   $('leg').innerHTML=`Lote ${p.testada}×${p.profund} m · TO ${(p.TO*100).toFixed(0)}% · af. frontal ${p.afFrontal} m`+`<br>${bindReason}${ousBadges}`;
 
   draw(p,G);
+  renderFlow(r.flow);
+}
+
+// ============ RENDER — FLUXO DE CAIXA ============
+const fmtMi=v=>(v<0?'−':'')+'R$ '+(Math.abs(v)/1e6).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})+' mi';
+const fmtPct1=v=>v==null?'n/d':(v*100).toLocaleString('pt-BR',{maximumFractionDigits:1})+'%';
+function renderFlow(f){
+  const via=f.vplEq>0, viaP=f.vplProj>0;
+  const kp=[
+    ['VPL equity', fmtMi(f.vplEq), via?'good':'bad'],
+    ['TIR equity (a.a.)', fmtPct1(f.tirEq), f.tirEq==null?'warn':(f.tirEq>=0.12?'good':'bad')],
+    ['VPL projeto', fmtMi(f.vplProj), viaP?'good':'bad'],
+    ['TIR projeto (a.a.)', fmtPct1(f.tirProj), f.tirProj==null?'warn':(f.tirProj>=0.12?'good':'bad')],
+    ['Exposição máx. (equity)', fmtMi(f.expEq), 'warn'],
+    ['Payback equity', f.paybackEq==null?'n/d':('mês '+f.paybackEq), f.paybackEq==null?'bad':''],
+  ];
+  $('kpisFlow').innerHTML=kp.map(k=>`<div class="kpi ${k[2]}"><div class="t">${k[0]}</div><div class="v ${String(k[1]).length>11?'small':''}">${k[1]}</div></div>`).join('');
+  drawFlow(f);
+}
+function drawFlow(f){
+  const cv=$('cvFlow'), ctx=cv.getContext('2d');
+  const rect=cv.getBoundingClientRect();
+  cv.width=Math.round(rect.width)||1200; cv.height=Math.round(rect.height)||290;
+  const W=cv.width, H=cv.height;
+  ctx.clearRect(0,0,W,H);
+  const padL=64, padR=16, padT=16, padB=26, M=f.MESES;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  // eixos: y abrange PC (projeto acum.) e EC (equity acum.)
+  let ymin=0, ymax=0;
+  for(let m=0;m<M;m++){ymin=Math.min(ymin,f.PC[m],f.EC[m]);ymax=Math.max(ymax,f.PC[m],f.EC[m]);}
+  const yr=(ymax-ymin)||1; ymin-=yr*0.06; ymax+=yr*0.06;
+  const X=m=>padL+(m/(M-1))*plotW;
+  const Y=v=>padT+(1-(v-ymin)/(ymax-ymin))*plotH;
+  // grid + zero
+  ctx.strokeStyle='#1f293f'; ctx.lineWidth=1; ctx.fillStyle='#6f7ea3'; ctx.font='10px Segoe UI';
+  for(let g=0;g<=4;g++){const yy=padT+g/4*plotH; const val=ymax-(ymax-ymin)*g/4;
+    ctx.beginPath();ctx.moveTo(padL,yy);ctx.lineTo(W-padR,yy);ctx.stroke();
+    ctx.textAlign='right';ctx.fillText((val/1e6).toFixed(1)+'mi',padL-6,yy+3);}
+  const y0=Y(0); ctx.strokeStyle='#3b4d77';ctx.lineWidth=1.3;
+  ctx.beginPath();ctx.moveTo(padL,y0);ctx.lineTo(W-padR,y0);ctx.stroke();
+  // marco da baixa
+  const xb=X(f.BR); ctx.setLineDash([4,4]);ctx.strokeStyle='#48577a';
+  ctx.beginPath();ctx.moveTo(xb,padT);ctx.lineTo(xb,H-padB);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle='#8fa3cc';ctx.textAlign='center';ctx.fillText('baixa (m'+f.BR+')',xb,H-padB+13);
+  // eixo x meses
+  ctx.fillStyle='#6f7ea3';
+  for(let m=0;m<M;m+=12){ctx.fillText('m'+m,X(m),H-padB+13);}
+  // barras do fluxo mensal do projeto (PF)
+  const bw=Math.max(1,plotW/M*0.6);
+  for(let m=0;m<M;m++){const v=f.PF[m]; if(Math.abs(v)<1)continue;
+    ctx.fillStyle=v>=0?'#1d5c44':'#6b2f26';
+    const yv=Y(v), yz=Y(0);
+    ctx.fillRect(X(m)-bw/2,Math.min(yv,yz),bw,Math.abs(yv-yz));}
+  // linha acumulada do projeto (PC)
+  ctx.strokeStyle='#38bdf8';ctx.lineWidth=2;ctx.beginPath();
+  for(let m=0;m<M;m++){const px=X(m),py=Y(f.PC[m]);m?ctx.lineTo(px,py):ctx.moveTo(px,py);}ctx.stroke();
+  // linha acumulada do equity (EC)
+  ctx.strokeStyle='#34d399';ctx.lineWidth=2;ctx.setLineDash([5,3]);ctx.beginPath();
+  for(let m=0;m<M;m++){const px=X(m),py=Y(f.EC[m]);m?ctx.lineTo(px,py):ctx.moveTo(px,py);}ctx.stroke();ctx.setLineDash([]);
+  $('legFlow').innerHTML='<span style="color:#38bdf8">━ Caixa acumulado (projeto)</span> &nbsp; '+
+    '<span style="color:#34d399">╌ Caixa acumulado (equity)</span> &nbsp; '+
+    '<span style="color:#1d5c44">▮ entrada</span> <span style="color:#6b2f26">▮ saída</span> mensal (projeto)';
 }
 
 // ============ DESENHO ISOMÉTRICO ============
