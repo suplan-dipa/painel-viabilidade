@@ -501,13 +501,16 @@ function compute(){
   const AGT = p.adere ? areaLiquida*FRv : 0;
   const vUR=num('vUR');
   const urRec = (areaNum===1) ? (AGT*V/1000)*vUR : 0;
+  const naoIncentivado = (+$('tipo').value === 7);   // índice 7 = "Não Incentivado"
   const caSuper = Math.max(0, Math.min(caPrat, p.caEfetivo*(1+p.supUR)) - p.caEfetivo);
   const AER = caSuper*AT;
-  const urDesp = (areaNum===2) ? (AER*V/1000)*vUR*(1+(num('pFundo')/100)) : 0;
+  // Despesa de UR (aquisição): Área 2 sempre; e Não Incentivado em 1A/1B ao superar o básico
+  // (é receptor de UR — adquire para o potencial adicional, mas não gera, pois FR=0).
+  const pagaDespUR = (areaNum===2) || (areaNum===1 && naoIncentivado);
+  const urDesp = (pagaDespUR && p.adere) ? (AER*V/1000)*vUR*(1+(num('pFundo')/100)) : 0;
   // ---- AMIS: regras por cenário e por tipo de empreendimento ----
   // Regra central (subáreas 1A/1B): incentivados são SEMPRE geradores de UR e NUNCA pagam AMIS.
   //   Só o "Não Incentivado" paga AMIS, e apenas se não superar o mínimo (supUR < 21%).
-  const naoIncentivado = (+$('tipo').value === 7);   // índice 7 = "Não Incentivado"
   let usarAMIS;
   if(cen==="Não adere"){
     usarAMIS=false;
@@ -611,7 +614,7 @@ function cashflow(x){
   _point (PF, AF, -x.cProj);                                // projetos mês 6
   _point (PF, AF, -0.1*x.cAdm); _point(PF, AG, -0.9*x.cAdm);// administração
   _point (PF, AF, -x.tdc);                                  // TDC mês 6
-  _point (PF, AG, -x.urDesp);                               // UR-despesa (Área 2) início obra
+  _point (PF, AG, -x.urDesp);                               // UR-despesa (aquisição) início obra
   // ODC: à vista no mês 7, ou parcelado 36x a partir do mês 7
   if(x.odcAvista) _point(PF, AG, -x.odc); else _spread(PF, AG, AG+35, -x.odc);
   // AMIS: momento (1/7/55) × parcelas (1..60)
@@ -682,7 +685,7 @@ function render(p,G,r){
     ['','Projetos + Administração',fmtR(r.cProj+r.cAdm)],
     ['','ODC',fmtR(r.odc)],
     ['','TDC',fmtR(r.tdc)],
-    ['','UR – despesa (Área 2)',fmtR(r.urDesp)],
+    ['','UR – despesa (aquisição)',fmtR(r.urDesp)],
     ['','AMIS',fmtR(r.amis)],
     ['','Comercial. + Mkt + Impostos',fmtR(r.cComm+r.cMkt+r.cImp)],
     ['tot','Custo total',fmtR(r.custoTot)],
