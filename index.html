@@ -1181,16 +1181,16 @@ function sincronizarEntradas(){
   }
 
   // (B1.2/B1.3) TETO DE SUPERAÇÃO VIA UR — sempre acima do CA MÁXIMO da zona.
-  //   Subáreas 1A/1B, empreendimento INCENTIVADO ... 0% (é gerador de UR, não supera)
-  //   Subáreas 1A/1B, NÃO INCENTIVADO ............. 70% (adquire UR como receptor)
-  //   Área 2 ...................................... 70%
+  //   Subáreas 1A/1B, INCENTIVADO ................. 70% por AUTOAPLICAÇÃO da UR
+  //                                                 que o próprio empreendimento gera
+  //   Subáreas 1A/1B, NÃO INCENTIVADO ............. 70% mediante aquisição de UR
+  //   Área 2 ...................................... 70% mediante aquisição
   //   Fora do perímetro, OP-3 ou Centr. Regional .. 20%
   //   Fora do perímetro, demais zonas ............. 10%
-  const naoIncSinc = (+$('tipo').value === 7);
   const maxSupURpct = !adere ? 0
     : area2 ? 70
     : fora  ? (emOp3cr ? 20 : 10)
-    : (naoIncSinc ? 70 : 0);
+    : 70;
   const pctCAval=Math.min(100,Math.max(0,num('pctCA')));
   if(String(pctCAval)!==$('pctCA').value) $('pctCA').value=pctCAval;
   const travado=(pctCAval<100)||maxSupURpct===0;
@@ -1462,16 +1462,27 @@ function modelo(p){
   // ---- Unidades de Regeneração ----
   const FRv=(FR[p.tipo]||FR[7])[p.prazoI];
   const areaLiquida=gross/p.fBruta;
-  const AGT=(p.adere&&p.areaNum===1)?areaLiquida*FRv:0;
-  const urRec=(p.adere&&p.areaNum===1)?(AGT*p.V/1000)*p.vUR:0;
-  // (B1.3/B1.4) A superação incide acima do CA MÁXIMO da zona — antes a base era
-  // o coeficiente efetivo. Adquirem UR os lotes RECEPTORES: Área 2, fora do
-  // perímetro e, nas Subáreas 1A/1B, o empreendimento NÃO INCENTIVADO (que
-  // adquire potencial mas não gera UR, pois seu fator de redução é zero).
+  // (B1.3/B1.4) A superação incide acima do CA MÁXIMO da zona. Adquirem UR os
+  // lotes RECEPTORES: Área 2, fora do perímetro e, nas Subáreas 1A/1B, o
+  // empreendimento NÃO INCENTIVADO (que adquire potencial mas não gera UR, pois
+  // seu fator de redução é zero).
   const caSuper=Math.max(0,Math.min(caPrat,p.caTeto)-p.caApl);
   const AER=caSuper*AT;
   const pagaDespUR=p.adere&&(p.areaNum===2||p.naoIncentivado);
   const urDesp=pagaDespUR?(AER*p.V/1000)*p.vUR*(1+p.pFundo):0;
+  // BASE DE GERAÇÃO LIMITADA AO COEFICIENTE MÁXIMO. Na Área 1 o empreendimento
+  // gera UR sobre o potencial até o CA da zona. Os metros quadrados construídos
+  // ACIMA do máximo, obtidos por superação, se autofinanciam: não geram UR nem
+  // consomem UR de terceiros, e por isso ficam fora da conta dos dois lados.
+  // Antes a base era a área líquida total, o que fazia a superação inflar a
+  // própria receita de UR que a viabilizava.
+  const areaGeradora=Math.min(caPrat,p.caApl)*AT;
+  const AGT=(p.adere&&p.areaNum===1)?areaGeradora*FRv:0;
+  const urRec=(p.adere&&p.areaNum===1)?(AGT*p.V/1000)*p.vUR:0;
+  // Diagnóstico: área excedente que se autofinancia (nem geradora, nem onerada).
+  const autoAplica=p.adere&&p.areaNum===1&&!p.naoIncentivado&&AER>0.5;
+  const urAutoQtd=autoAplica?AER*p.V/1000:0;
+  const urAutoValor=urAutoQtd*p.vUR;
   // Diagnóstico da superação. A UR já é cobrada apenas sobre o potencial
   // EFETIVAMENTE exercido (AER); o que depende do percentual declarado é a
   // dispensa da AMIS. Quando a Regra do H, a taxa de ocupação ou o limite
@@ -1579,7 +1590,8 @@ function modelo(p){
     vgvNaoRealizado,receitaVendas,ganhoINCC,areaEstoque,correcaoObra,permutaFin,vgvPermuta,reconc,
     laje,naoPriv,areaEquiv,equivRes,equivCom,
     onerav,tdcArea,isentaAFP,isentaHIS,isentaFA,isenta,isentaExcedente,odcArea,odcCheia,isencao,odc,tdc,
-    FRv,AGT,urRec,caSuper,AER,urDesp,pagaDespUR,supURInoperante,supURParcial,supExerc,usarAMIS,amis,
+    FRv,AGT,areaGeradora,urRec,caSuper,AER,urDesp,pagaDespUR,autoAplica,urAutoQtd,urAutoValor,
+    supURInoperante,supURParcial,supExerc,usarAMIS,amis,
     isentoITBI,itbi,AT,valTer,
     cObra,cObraR,cObraC,vgvR,vgvC,vgvBruto,vgvDisp,cTer,permFinanc,
     cProj,cAdm,cComm,cMkt,cImp,cLanc,cAssist,custoBase,custoTot,
@@ -1642,7 +1654,7 @@ function aplicarNaUI(p,R){
     const n2=v=>Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
     const pc=v=>(Number(v||0)*100).toLocaleString('pt-BR',{maximumFractionDigits:1})+'%';
     const m2=v=>Number(v||0).toLocaleString('pt-BR',{maximumFractionDigits:1})+' m²';
-    const teto=p.adere?(p.area2?70:(p.fora?(p.emOp3cr?20:10):(p.naoIncentivado?70:0))):0;
+    const teto=p.adere?(p.area2?70:(p.fora?(p.emOp3cr?20:10):70)):0;
     const limA=R.G.bindingAlt?'pelo limite altimétrico'
       :(R.G.bindingCA?'pelo próprio coeficiente':'pela geometria — Regra do H, afastamentos e taxa de ocupação');
     const limB=R.G.bindingAlt?'o limite altimétrico'
@@ -1650,7 +1662,10 @@ function aplicarNaUI(p,R){
     if(!p.adere||teto===0){ hSup.innerHTML=''; hSup.className='hint'; }
     else if(p.supUR<=0){
       hSup.className='hint';
-      hSup.innerHTML=`Teto de <b>${teto}%</b> acima do coeficiente máximo (${n2(p.caApl)}) neste cenário.`;
+      const via=(p.areaNum===1&&!p.naoIncentivado)
+        ? 'por <b>autoaplicação</b> da UR que o próprio empreendimento gera — sem despesa nem receita'
+        : 'mediante <b>aquisição</b> de UR';
+      hSup.innerHTML=`Teto de <b>${teto}%</b> acima do coeficiente máximo (${n2(p.caApl)}) neste cenário, ${via}.`;
     }else if(R.supURInoperante){
       hSup.className='hint hintAlerta';
       hSup.innerHTML=`⚠ <b>O percentual declarado não é alcançado.</b> O envelope é limitado ${limA}, `
@@ -1666,7 +1681,14 @@ function aplicarNaUI(p,R){
     }else{
       hSup.className='hint';
       hSup.innerHTML=`✓ Superação integralmente exercida: <b>${m2(R.AER)}</b> acima do coeficiente máximo, `
-        +`equivalentes a ${pc(R.supExerc)} do CA máximo.`;
+        +`equivalentes a ${pc(R.supExerc)} do CA máximo.`
+        +(R.autoAplica
+          ? ` Em Subárea ${p.cenario.indexOf('1B')>=0?'1B':'1A'} o empreendimento incentivado <b>autoaplica</b> `
+            +`a UR que ele próprio gera. Esses ${m2(R.AER)} <b>se autofinanciam</b>: não geram UR nem `
+            +`consomem UR de terceiros, e ficam fora da base de geração. `
+            +`A receita de UR (${fmtR(R.urRec)}) corresponde ao potencial até o coeficiente máximo e `
+            +`<b>não varia com a superação</b>.`
+          : '');
     }
   }
   const hVL=$('hintVL');
@@ -2563,11 +2585,9 @@ function updateVisibility(){
     ['rowTipo'].forEach(id=>{
       const el=$(id);if(el)el.style.display='none';
     });
-  } else {
-    // Subáreas 1A/1B: só o empreendimento NÃO INCENTIVADO supera o CAmax via UR.
-    // No incentivado o campo é ocultado — ele é gerador, não receptor.
-    if(+$('tipo').value!==7){const el=$('rowSupUR'); if(el) el.style.display='none';}
   }
+  // Nas Subáreas 1A/1B o campo de superação permanece visível para todos os tipos:
+  // o não incentivado adquire UR, o incentivado autoaplica a que ele mesmo gera.
 }
 function setMode(m){
   document.querySelectorAll('.modeSel .mode').forEach(b=>b.classList.toggle('active',b.dataset.mode===m));
@@ -3487,16 +3507,28 @@ function buildAuditoria(){
     </div>`;
   if(A.tdc>0) h+=et('Transferência do Direito de Construir', 'Contrapartida pela aquisição de potencial transferido.',
     'TDC', '—', rs(A.tdc));
+  if(A.urRec>0) h+=et('Base de geração de UR',
+    'A geração incide sobre o potencial construtivo até o <b>coeficiente máximo</b> da zona. Área obtida por superação não integra a base: ela se autofinancia.',
+    'Área geradora = mín(CA<sub>prat</sub> ; CA<sub>máx</sub>) × AT',
+    `mín(${n4(A.caPrat)} ; ${n4(A.caApl)}) × ${m2(A.Alote)}`, m2(A.areaGeradora),
+    'Correção aplicada: a base anterior era a área líquida total, de modo que a superação inflava a própria receita de UR que a viabilizava.', true);
   if(A.urRec>0) h+=et('Receita de Unidades de Regeneração',
-    'Empreendimentos incentivados nas subáreas 1A e 1B <b>geram</b> UR. A área geradora deriva da área construída líquida.',
-    'UR<sub>receita</sub> = (Construída ÷ 1,7) × FR × (V ÷ 1000) × valor da UR',
-    `(${m2(A.gross)} ÷ 1,7) × ${n2(A.FRv)} × (${n0(A.V)} ÷ 1000) × ${n0(A.vUR)}`,
+    'Empreendimentos incentivados nas subáreas 1A e 1B <b>geram</b> UR sobre a base acima.',
+    'UR<sub>receita</sub> = Área geradora × FR × (V ÷ 1000) × valor da UR',
+    `${m2(A.areaGeradora)} × ${n2(A.FRv)} × (${n0(A.V)} ÷ 1000) × ${n0(A.vUR)}`,
     rs(A.urRec), 'FR é o fator de redução do Anexo III, definido pelo tipo de empreendimento e pelo prazo.');
   if(A.urDesp>0) h+=et('Despesa de aquisição de UR',
     'A UR é adquirida exclusivamente por lotes <b>receptores</b> — Área 2 e fora do perímetro — para exercer potencial acima do <b>coeficiente máximo</b> da zona.',
     'ΔCA = min(CA<sub>prat</sub> ; CA<sub>máx</sub> × (1 + %superação)) − CA<sub>máx</sub><br>UR<sub>despesa</sub> = ΔCA × AT × (V ÷ 1000) × valor da UR × (1 + fundo)',
     `(min(${n4(A.caPrat)} ; ${n4(A.caTeto)}) − ${n4(A.caApl)}) = ${n4(A.caSuper)} ; ${n4(A.caSuper)} × ${m2(A.Alote)} × (${n0(A.V)} ÷ 1000) × ${n0(A.vUR)} × (1 + ${pc(A.p.pFundo)})`,
     rs(A.urDesp));
+  if(A.autoAplica) h+=et('Superação por autoaplicação de UR',
+    'Nas Subáreas 1A e 1B o empreendimento incentivado supera o coeficiente máximo aplicando a si próprio a UR que ele gera. Os metros quadrados assim obtidos <b>se autofinanciam</b>: não geram UR nem consomem UR de terceiros, e por isso ficam fora da base de geração — nem como receita, nem como despesa.',
+    'Área autofinanciada = (min(CA<sub>prat</sub> ; CA<sub>teto</sub>) − CA<sub>máx</sub>) × AT',
+    `(min(${n4(A.caPrat)} ; ${n4(A.caTeto)}) − ${n4(A.caApl)}) × ${m2(A.Alote)}`,
+    m2(A.AER),
+    `Equivalem a ${n2(A.urAutoQtd)} UR (${rs(A.urAutoValor)}) que não transitam em nenhuma das duas rubricas. `
+    +`A receita de UR não varia com a superação.`);
   if(A.supURInoperante) h+=et('Superação declarada sem efeito',
     'A superação via UR foi declarada, mas o envelope construtivo não alcança o coeficiente máximo da zona — o potencial adicional não é exercido e nenhuma UR é efetivamente adquirida.',
     'ΔCA = min(CA<sub>prat</sub> ; CA<sub>teto</sub>) − CA<sub>máx</sub>',
@@ -3969,7 +4001,7 @@ $('pdfBtn').addEventListener('click',()=>{ buildReport(); setTimeout(()=>window.
 // perceba. O bloco abaixo carimba tudo o que determina o resultado.
 
 const MODELO={
-  versao:'4.3.0',
+  versao:'4.6.0',
   marcos:{
     lei:'Lei Municipal nº 11.181/2019 (Plano Diretor de Belo Horizonte)',
     ous:'PL nº 574/2025 — Operação Urbana Simplificada Somos Centro (substitutivo)',
@@ -3977,6 +4009,8 @@ const MODELO={
     nbr:'NBR 12721 (área equivalente de construção) · NBR 14653 (não aplicada)'
   },
   historico:[
+    ['4.6.0','Base de geração de UR limitada ao coeficiente máximo da zona. Os metros quadrados obtidos por superação se autofinanciam: não geram nem consomem UR, ficando fora da conta dos dois lados. A receita de UR deixa de variar com a superação e o déficit de geração torna-se impossível por construção.'],
+    ['4.4.0','Superação do coeficiente máximo em Subáreas 1A e 1B estendida aos empreendimentos incentivados, por autoaplicação da UR gerada — sem despesa de aquisição nem receita de alienação. Quantidade e valor nocional das UR autoaplicadas registrados no memorial.'],
     ['4.3.0','Alerta ao lado do campo de superação via UR quando o percentual declarado não é alcançado por limitação da geometria, do limite altimétrico ou do coeficiente, com indicação da parcela efetivamente exercida.'],
     ['4.2.0','Treze casos de auditoria incorporados como cenários pré-definidos, reproduzindo a planilha de conferência. Botão Abrir passa a oferecer arquivo ou cenário pré-definido; presets completos partem dos padrões de fábrica.'],
     ['4.1.0','Memorial de cálculo com síntese executiva, sumário navegável, quadro consolidado de contrapartidas, fluxo por ano e premissas alteradas. Constantes normativas condicionadas ao cenário: regras não aplicáveis deixam de ser listadas como se tivessem sido aplicadas.'],
@@ -3996,7 +4030,7 @@ function constantesVigentes(p, R){
   const z=ZONES[p.zona]||[0,0,0];
   const gerador=p.adere&&p.areaNum===1;
   const receptor=p.adere&&p.areaNum===2;
-  const teto=!p.adere?0:(p.area2?70:(p.fora?(p.emOp3cr?20:10):(p.naoIncentivado?70:0)));
+  const teto=!p.adere?0:(p.area2?70:(p.fora?(p.emOp3cr?20:10):70));
   const limAMIS=!p.adere?null:(p.fora?(p.emOp3cr?10:5):(p.area2?21:(p.naoIncentivado?21:null)));
   const regimeHIS=R?!!R.regimeHIS:(p.aeis||(p.adere&&p.tipo===1));
   const temODC=R?R.odc>0.5:true;
@@ -4021,9 +4055,12 @@ function constantesVigentes(p, R){
   put(p.adere&&!p.fora&&!!ANEXOV[p.areaNum],'Isenção temporal (Anexo V)',
       (ANEXOV[p.areaNum]||[]).map(v=>(v*100).toFixed(0)+'%').join(' / ')+'  [≤2 / 2–4 / 4–6 anos]',
       p.fora?'lote fora do perímetro da operação':(p.adere?null:'aplicável apenas na OUS'));
-  put(p.adere&&teto>0,'Teto de superação via UR', teto+'% acima do coeficiente máximo',
-      p.adere?'lote gerador: a superação é exclusiva de receptores (Área 2 e fora do perímetro)'
-             :'aplicável apenas na OUS');
+  put(p.adere&&teto>0,'Teto de superação via UR',
+      teto+'% acima do coeficiente máximo'
+      + (gerador ? (p.naoIncentivado?' · mediante aquisição de UR':' · por autoaplicação da UR gerada') : ' · mediante aquisição de UR'),
+      'aplicável apenas na OUS');
+  put(R&&R.autoAplica,'Regime da superação em Subárea 1A/1B',
+      'autoaplicação — sem despesa de aquisição nem receita de alienação', null);
   put(p.adere&&limAMIS!=null,'Limiar de dispensa da AMIS', limAMIS+'% de superação via UR',
       p.adere?'empreendimento incentivado em Subárea 1A/1B — isento de AMIS':'AMIS não incide fora da OUS');
   put(receptor,'Acréscimo do Fundo sobre a UR adquirida',(p.pFundo*100).toFixed(0)+'%',null);
@@ -4489,8 +4526,9 @@ function rodarTestes(){
     // ---------- 2. AMIS ----------
     const amisEsp=v=>0.5*v.V*v.AT;
     c=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OP-3',tipo:'3',supUR:'50'});
-    T('2. AMIS','1A incentivado: isento de AMIS',c.A.amis,eq(c.A.amis,0),0);
-    T('2. AMIS','1A incentivado: não supera o CAmax (teto 0%)',c.A.supUR*100,eq(c.A.supUR,0),0);
+    T('2. AMIS','1A incentivado: isento de AMIS mesmo superando o CAmax',c.A.amis,eq(c.A.amis,0),0);
+    T('2. AMIS','1A incentivado: teto de superação é 70%',c.A.supUR*100,eq(c.A.supUR*100,50),
+      '50 aceito (teto 70)');
     c=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OP-3',tipo:'7',supUR:'0'});
     T('2. AMIS','1A não incentivado, superação 0% (< 21%): AMIS devida',
       Math.round(c.A.amis),eq(c.A.amis,amisEsp(c.A)),Math.round(amisEsp(c.A)));
@@ -4535,6 +4573,56 @@ function rodarTestes(){
     T('3. UR','Incentivado em 1A gera UR e nada adquire',
       `gera ${Math.round(c.A.urRec)} · adquire ${Math.round(c.A.urDesp)}`,
       c.A.urRec>0&&eq(c.A.urDesp,0),'gera > 0 · adquire 0');
+
+    // ---------- 3b. Autoaplicação em Subárea 1A/1B ----------
+    T('3. UR','Incentivado em 1A/1B pode superar o CAmax (teto 70%)',
+      (c.A.supUR*100).toFixed(0)+'%',eq(c.A.supUR*100,70),70);
+    T('3. UR','A superação do incentivado é por autoaplicação',
+      `AER ${Math.round(c.A.AER)} m² · autoaplica ${c.A.autoAplica}`,
+      c.A.AER>0&&c.A.autoAplica===true,'AER > 0 e autoaplicação');
+    T('3. UR','Autoaplicação não gera despesa de aquisição',
+      Math.round(c.A.urDesp),eq(c.A.urDesp,0),0);
+    T('3. UR','Quantidade e valor das UR autoaplicadas são coerentes entre si',
+      `${c.A.urAutoQtd.toFixed(1)} UR · ${Math.round(c.A.urAutoValor)}`,
+      c.A.urAutoQtd>0&&eq(c.A.urAutoValor,c.A.urAutoQtd*c.A.vUR),'coerentes');
+    T('3. UR','Base de geração limitada ao coeficiente máximo',
+      `${Math.round(c.A.areaGeradora)} m² de ${Math.round(c.A.gross/c.A.fBruta)} m² líquidos`,
+      eq(c.A.areaGeradora,Math.min(c.A.caPrat,c.A.caApl)*c.A.AT),'mín(CAprat; CAmax) × AT');
+    T('3. UR','Receita de UR apurada sobre a base limitada',
+      Math.round(c.A.urRec),eq(c.A.urRec,c.A.areaGeradora*c.A.FRv*c.A.V/1000*c.A.vUR),
+      'área geradora × FR × V/1000 × valor da UR');
+    // a superação não pode produzir receita adicional de UR: o excedente é consumido
+    const s0=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OM-1',tipo:'0',supUR:'0'}).A;
+    const s40=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OM-1',tipo:'0',supUR:'40'}).A;
+    const s70=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OM-1',tipo:'0',supUR:'70'}).A;
+    T('3. UR','Superar o CAmax não aumenta a receita de UR do gerador',
+      `${Math.round(s0.urRec)} · ${Math.round(s40.urRec)} · ${Math.round(s70.urRec)}`,
+      eq(s0.urRec,s40.urRec)&&eq(s0.urRec,s70.urRec),'constante');
+    T('3. UR','A área superada fica fora da base de geração',
+      `${Math.round(s0.areaGeradora)} m² · ${Math.round(s40.areaGeradora)} m² · ${Math.round(s70.areaGeradora)} m²`,
+      eq(s0.areaGeradora,s40.areaGeradora)&&eq(s0.areaGeradora,s70.areaGeradora),'constante');
+    T('3. UR','Base de geração nunca excede o potencial do coeficiente máximo',
+      `${Math.round(s70.areaGeradora)} ≤ ${Math.round(s70.caApl*s70.AT)}`,
+      s70.areaGeradora<=s70.caApl*s70.AT+_TOL,'≤ CAmax × AT');
+    // com fator de redução baixo a geração continua coerente: não há déficit possível
+    const frb=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OM-1',tipo:'3',
+      prazo:'Após 4 e até 6 anos',supUR:'70'}).A;
+    const frb0=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OM-1',tipo:'3',
+      prazo:'Após 4 e até 6 anos',supUR:'0'}).A;
+    T('3. UR','Com fator de redução baixo a receita permanece positiva e constante',
+      `${Math.round(frb0.urRec)} → ${Math.round(frb.urRec)}`,
+      frb.urRec>0&&eq(frb.urRec,frb0.urRec),'positiva e inalterada');
+    T('3. UR','Superação nunca gera despesa de UR na Área 1 incentivada',
+      `${Math.round(frb.urDesp)} · ${Math.round(s70.urDesp)}`,
+      eq(frb.urDesp,0)&&eq(s70.urDesp,0),'zero em ambos');
+    T('3. UR','Reconciliação preservada com autoaplicação',
+      Math.round(c.A.reconc),Math.abs(c.A.reconc)<1,0);
+    T('3. UR','Não incentivado em 1A continua adquirindo UR',
+      Math.round(_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OM-1',tipo:'7',supUR:'70'}).A.urDesp),
+      _cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OM-1',tipo:'7',supUR:'70'}).A.urDesp>0,'> 0');
+    T('3. UR','Campo de superação visível para incentivado em 1A/1B',
+      (aplicarPreset('aud03'),updateVisibility(),$('rowSupUR').style.display||'visível'),
+      $('rowSupUR').style.display!=='none','visível');
 
     // ---------- 4. Outorga Onerosa ----------
     c=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OP-3',
@@ -4883,9 +4971,12 @@ function rodarTestes(){
     T('14. Superação','O alerta parcial identifica o limite altimétrico',
       /altim/.test(hs())?'sim':'não',/altim/.test(hs()),'sim');
     // cenários sem direito a superação não exibem alerta
-    aplicarPreset('aud03');
-    T('14. Superação','Cenário sem direito a superação não exibe alerta',
+    _cenarioTeste({__modo:'lei',zona:'OP-3'});     // fora da operação: não há superação via UR
+    T('14. Superação','Cenário fora da operação não exibe alerta de superação',
       hs()===''?'vazio':hs().slice(0,40),hs()==='','vazio');
+    aplicarPreset('aud03');
+    T('14. Superação','Incentivado em 1A informa que o teto é por autoaplicação',
+      hs().slice(0,70),/autoaplica/i.test(hs())&&/70%/.test(hs()),'teto 70% por autoaplicação');
     aplicarPreset('aud09');
     T('14. Superação','Sem superação declarada, informa apenas o teto do cenário',
       hs().slice(0,50),!/hintAlerta/.test($('hintSupUR').className)&&/Teto de/.test(hs()),'teto informado');
