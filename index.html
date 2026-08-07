@@ -1433,6 +1433,10 @@ function modelo(p){
 
   // ---- contrapartidas ----
   const AT=Alote, valTer=AT*p.V;
+  // Potencial construtivo total segundo o coeficiente praticado. Em AEIS-1 o
+  // coeficiente incide sobre a área BRUTA; nas demais zonas, sobre a computável.
+  // Em ambos os casos vale CA praticado × área do terreno.
+  const potencialCA=caPrat*AT;
   const onerav=Math.max(0,Math.min(caPrat,p.caEfetivo)-p.CAbas)*AT;
   const tdcArea=p.pTDC*onerav;
   const AFP_m2=p.AFPpct*Alote;
@@ -1441,10 +1445,15 @@ function modelo(p){
   // construída — por isso a geometria permanece inalterada.
   const fatorAFP=(!p.lei&&p.adere)?p.fatorAFPin:1.0;
   const isentaAFP=AFP_m2*fatorAFP;
-  // (B1.5) ISENÇÃO POR HIS — incide sobre a ÁREA ONERÁVEL (entre o básico e o
-  // máximo), não sobre o potencial total. A fórmula anterior usava caPrat×AT, o
-  // que produzia isenção de até 1,86× o próprio fato gerador.
-  const isentaHIS=regimeHIS?onerav*(HIS.his1*p.isenHis1+HIS.his2*p.isenHis2):0;
+  // (4.7.0) ISENÇÃO POR HIS — a QUANTIDADE de metros isentos decorre da
+  // composição de HIS aplicada ao POTENCIAL CONSTRUTIVO TOTAL: é sobre a área
+  // total do empreendimento que a composição de unidades se distribui. Esses
+  // metros são então abatidos da área onerável, sem gerar crédito além dela.
+  // Medir a isenção apenas sobre a faixa onerável subestimava gravemente o
+  // benefício nas zonas de coeficiente básico elevado — em AEIS-1, com CAbas de
+  // 1,7, a faixa onerável é estreita e a isenção caía de 8.982 para 3.529 m²
+  // num caso real de 16.884 m² construídos.
+  const isentaHIS=regimeHIS?potencialCA*(HIS.his1*p.isenHis1+HIS.his2*p.isenHis2):0;
   // (B1.8) fachada ativa na OUS: m² de fachada ativa isenta m² de ODC, limitada
   // à área do pavimento térreo (igual à TO quando esta é adotada integralmente).
   const isentaFA=(!p.lei&&p.adere&&!p.aeis)?fachada:0;
@@ -1589,7 +1598,7 @@ function modelo(p){
     fachada,fachadaVend,brutaCom,brutaRes,terreoBruto,pctComAuto,pAptoEfetivo,regimeHIS,HIS,centralidade,interesseSocial,
     vgvNaoRealizado,receitaVendas,ganhoINCC,areaEstoque,correcaoObra,permutaFin,vgvPermuta,reconc,
     laje,naoPriv,areaEquiv,equivRes,equivCom,
-    onerav,tdcArea,isentaAFP,isentaHIS,isentaFA,isenta,isentaExcedente,odcArea,odcCheia,isencao,odc,tdc,
+    potencialCA,onerav,tdcArea,isentaAFP,isentaHIS,isentaFA,isenta,isentaExcedente,odcArea,odcCheia,isencao,odc,tdc,
     FRv,AGT,areaGeradora,urRec,caSuper,AER,urDesp,pagaDespUR,autoAplica,urAutoQtd,urAutoValor,
     supURInoperante,supURParcial,supExerc,usarAMIS,amis,
     isentoITBI,itbi,AT,valTer,
@@ -1728,7 +1737,7 @@ function compute(){
     p,G:R.G,lei:p.lei,aeis:p.aeis,adere:p.adere,areaNum:p.areaNum,fora:p.fora,
     CAbas:p.CAbas,caApl:p.caApl,caEfetivo:p.caEfetivo,caTeto:p.caTeto,supUR:p.supUR,
     faPct:p.faPct,brutaLiq:p.brutaLiq,fBruta:p.fBruta,
-    potencialODC:R.onerav,VL:p.VL,emOp3cr:p.emOp3cr,vlOp3:(p.zona==='OP-3'),
+    potencialODC:R.potencialCA,VL:p.VL,emOp3cr:p.emOp3cr,vlOp3:(p.zona==='OP-3'),
     odcAvista:p.odcAvista,naoIncentivado:p.naoIncentivado,
     V:p.V,vUR:p.vUR,permuta:p.permuta,permFisica:p.permFisica,
     AFPpct:p.AFPpct,fatorAFP:(!p.lei&&p.adere)?p.fatorAFPin:1.0,
@@ -3460,11 +3469,12 @@ function buildAuditoria(){
     `${pc(A.p.AFPpct)} × ${m2(A.Alote)} × ${n2(A.fatorAFP)}`,
     m2(A.isentaAFP));
   if(A.regimeHIS) h+=et('Isenção por habitação de interesse social',
-    'HIS-1 é integralmente isenta de outorga e HIS-2 paga metade. Os metros de HIS isentam metros <b>onerosos</b> — a base é a área onerável, situada entre o coeficiente básico e o máximo.',
-    'Isenção<sub>HIS</sub> = (%HIS-1 × isenção₁ + %HIS-2 × isenção₂) × Onerável',
-    `(${pc(A.HIS.his1)} × ${pc(A.isenHis1)} + ${pc(A.HIS.his2)} × ${pc(A.isenHis2)}) × ${m2e(A.onerav)}`,
+    'A composição de HIS se distribui sobre a <b>área total</b> do empreendimento: é dela que decorre a quantidade de metros de HIS produzidos. HIS-1 é integralmente isenta de outorga e HIS-2 é isenta na proporção informada. Esses metros isentam metros onerosos, abatidos da área onerável sem gerar crédito além dela.',
+    'Isenção<sub>HIS</sub> = (%HIS-1 × isenção₁ + %HIS-2 × isenção₂) × Potencial construtivo',
+    `(${pc(A.HIS.his1)} × ${pc(A.isenHis1)} + ${pc(A.HIS.his2)} × ${pc(A.isenHis2)}) × ${m2e(A.potencialCA)}`,
     m2(A.isentaHIS),
-    'Correção aplicada: a base anterior era o potencial construtivo total (CA<sub>prat</sub> × AT), o que produzia isenção superior à própria área onerável.');
+    'Potencial construtivo = CA praticado × área do terreno — em AEIS-1 sobre a área bruta, nas demais zonas sobre a computável. '
+    +'Correção aplicada: a base anterior era apenas a faixa onerável, o que subestimava a isenção nas zonas de coeficiente básico elevado, como AEIS-1.');
   if(A.isentaFA>0) h+=et('Isenção por fachada ativa (OUS)',
     'No PL a fachada ativa deixa de ser área não computada e passa a isentar outorga metro a metro, limitada à área do pavimento térreo.',
     'Isenção<sub>FA</sub> = min(% fachada × AT ; área do pavimento térreo)',
@@ -4001,7 +4011,7 @@ $('pdfBtn').addEventListener('click',()=>{ buildReport(); setTimeout(()=>window.
 // perceba. O bloco abaixo carimba tudo o que determina o resultado.
 
 const MODELO={
-  versao:'4.6.0',
+  versao:'4.7.0',
   marcos:{
     lei:'Lei Municipal nº 11.181/2019 (Plano Diretor de Belo Horizonte)',
     ous:'PL nº 574/2025 — Operação Urbana Simplificada Somos Centro (substitutivo)',
@@ -4009,6 +4019,7 @@ const MODELO={
     nbr:'NBR 12721 (área equivalente de construção) · NBR 14653 (não aplicada)'
   },
   historico:[
+    ['4.7.0','Isenção de ODC por HIS medida sobre o potencial construtivo total, e não apenas sobre a faixa onerável — correção determinante em AEIS-1, cujo coeficiente básico de 1,7 torna a faixa onerável estreita.'],
     ['4.6.0','Base de geração de UR limitada ao coeficiente máximo da zona. Os metros quadrados obtidos por superação se autofinanciam: não geram nem consomem UR, ficando fora da conta dos dois lados. A receita de UR deixa de variar com a superação e o déficit de geração torna-se impossível por construção.'],
     ['4.4.0','Superação do coeficiente máximo em Subáreas 1A e 1B estendida aos empreendimentos incentivados, por autoaplicação da UR gerada — sem despesa de aquisição nem receita de alienação. Quantidade e valor nocional das UR autoaplicadas registrados no memorial.'],
     ['4.3.0','Alerta ao lado do campo de superação via UR quando o percentual declarado não é alcançado por limitação da geometria, do limite altimétrico ou do coeficiente, com indicação da parcela efetivamente exercida.'],
@@ -4635,8 +4646,21 @@ function rodarTestes(){
     c=_cenarioTeste({__modo:'lei',zona:'OM-2',pTDC:'0',AFP:'0',faModo:'0'});
     T('4. ODC','VL nas demais zonas = 0,50, também no marco Lei',c.A.VL,eq(c.A.VL,0.5),0.5);
     c=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'Aeis-1',tipo:'3'});
-    T('4. ODC','Isenção por HIS nunca excede a área onerável',
-      (c.A.isentaHIS/(c.A.onerav||1)).toFixed(3),c.A.isentaHIS<=c.A.onerav+_TOL,'≤ 1,000');
+    T('4. ODC','Isenção por HIS medida sobre o potencial construtivo total',
+      Math.round(c.A.isentaHIS),
+      eq(c.A.isentaHIS,c.A.potencialCA*(c.A.HIS.his1*c.A.p.isenHis1+c.A.HIS.his2*c.A.p.isenHis2)),
+      'composição × CAprat × AT');
+    T('4. ODC','Potencial construtivo é CA praticado × área do terreno',
+      Math.round(c.A.potencialCA),eq(c.A.potencialCA,c.A.caPrat*c.A.AT),'CAprat × AT');
+    T('4. ODC','Em AEIS-1 o potencial coincide com a área bruta (CA sobre a bruta)',
+      `${Math.round(c.A.potencialCA)} e ${Math.round(c.A.gross)}`,eq(c.A.potencialCA,c.A.gross),'iguais');
+    T('4. ODC','Isenção que excede a área onerável não gera crédito',
+      `isenção ${Math.round(c.A.isentaHIS)} · onerável ${Math.round(c.A.onerav)} · tributável ${Math.round(c.A.odcArea)}`,
+      c.A.isentaHIS>c.A.onerav&&eq(c.A.odcArea,0)&&c.A.isentaExcedente>0,'tributável zero, excedente registrado');
+    // AEIS-1 com coeficiente básico de 1,7: a faixa onerável é estreita e medir a
+    // isenção sobre ela subestimava o benefício
+    T('4. ODC','Em AEIS-1 a isenção supera a faixa onerável, e isso é esperado',
+      (c.A.isentaHIS/(c.A.onerav||1)).toFixed(2)+'×',c.A.isentaHIS>c.A.onerav,'> 1,00');
     c=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OP-3',faModo:'to',AFP:'0',tipo:'3'});
     T('4. ODC','Isenção por fachada ativa limitada à laje do térreo',
       Math.round(c.A.isentaFA),eq(c.A.isentaFA,Math.min(c.A.faPct*c.A.Alote,c.A.terreoBruto)),
