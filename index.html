@@ -985,13 +985,13 @@
       <div class="row"><label>Quota de terreno por unidade (m²/un · 0 = sem limite)</label><input id="QT" type="number" step="1" value="0" min="0"></div>
       <div class="row" id="rowQTmodo"><label>Resposta à quota</label>
         <select id="QTmodo">
-          <option value="absorver">Manter a área (unidades maiores)</option>
-          <option value="produto">Manter o tamanho da unidade (potencial ocioso)</option>
+          <option value="absorver">Usar o potencial (área da unidade resulta da quota)</option>
+          <option value="produto">Fixar o tamanho da unidade (CA pode ficar ocioso)</option>
         </select></div>
       <div class="hint" id="hintQT"></div>
       <div class="row"><label>Vagas de estacionamento</label>
         <select id="vagasModo">
-          <option value="lei">Mínimo exigido (Lei) / máximo admitido (OUS)</option>
+          <option value="lei">Automático: mínimo da Lei / 0 vaga obrigatória na OUS</option>
           <option value="zero">Sem garagem</option>
           <option value="manual">Quantidade informada</option>
         </select></div>
@@ -1060,7 +1060,7 @@
           <option value="luxo">Luxo</option>
         </select></div>
       <div class="hint" id="hintPadrao">Preenche CUB, BDI e faixa de preço com valores típicos do padrão. <b>Todos os campos continuam editáveis</b> — ao alterar qualquer um, o padrão passa a "Personalizado".</div>
-      <div class="row"><label>V – valor declarado do terreno (R$/m²)</label><input id="V" type="number" step="100" value="6500"></div>
+      <div class="row"><label>V – valor do terreno para fins de instrumentos (R$/m²)</label><input id="V" type="number" step="100" value="6500"></div>
       <div class="hint" id="hintVdecl">Base dos instrumentos urbanísticos — ODC, UR, AMIS e ITBI incidem sobre este valor.</div>
       <div class="row"><label>Valor real de aquisição (R$/m², vazio = igual ao declarado)</label><input id="Vreal" type="number" step="100" placeholder="igual ao declarado"></div>
       <div class="hint" id="hintVreal">Custo efetivamente pago pelo terreno. Entra no fluxo de caixa e na permuta; não altera os instrumentos.</div>
@@ -1559,9 +1559,25 @@ function planejarTransicoes(p,TOarea,altLim,grossMax){
   // mesma, redistribuída em unidades maiores.
   const _unQ = p.QT>0 ? Math.floor(Alote/p.QT) : Infinity;
   if(p.QTmodo==='produto' && isFinite(_unQ) && p.areaUnid>0){
-    // área privativa residencial admitida → área bruta equivalente
-    const brutaQuota = _unQ*p.areaUnid*p.brutaPriv;
-    grossMax = Math.min(grossMax, brutaQuota);
+    // A quota limita UNIDADES HABITACIONAIS, não a parcela comercial.
+    // No modo de produto rígido, preserva-se o programa comercial e limita-se
+    // apenas a área residencial compatível com o número máximo de unidades.
+    // Na Lei, a fachada ativa é não computada e já fica fora de grossMax.
+    // Na OUS, ela integra a ATE e precisa ser somada ao teto residencial.
+    const lat0=regraH(p.peDir,p.A0,p.A1,p.Bh);
+    let w0=p.testada-(p.cegaEsq?0:lat0)-(p.cegaDir?0:lat0);
+    let d0=p.profund-p.afFrontal-lat0;
+    const _nT0=p.nTorres||1;
+    if(_nT0>1){
+      const db0=distBlocos(p.peDir,p.A0,p.A1,p.Bh,p.adere);
+      if(p.arranjo==='profund') d0-=(_nT0-1)*db0; else w0-=(_nT0-1)*db0;
+    }
+    const terreoPot=Math.max(0,Math.min(TOarea,Math.max(0,w0)*Math.max(0,d0)));
+    const brutaComQuota=(!p.lei && !p.aeis)
+      ? Math.min(Math.max(0,p.faPct*Alote),terreoPot)
+      : 0;
+    const brutaResidQuota=_unQ*p.areaUnid*p.brutaPriv;
+    grossMax = Math.min(grossMax, brutaComQuota+brutaResidQuota);
   }
   const altLim = (p.altMax>0) ? p.altMax : Infinity;
   let grossAcc=0;
@@ -2070,9 +2086,9 @@ function lerParametros(){
   p.isenHis1=num('isenHis1')/100; p.isenHis2=num('isenHis2')/100;
   // mercado
   p.V=num('V'); p.pApto=num('pApto'); p.pCom=num('pCom');
-  // Valor DECLARADO (p.V) é a base dos instrumentos urbanísticos. Valor REAL de
+  // Valor PARA FINS DE INSTRUMENTOS (p.V) é a base dos instrumentos urbanísticos. Valor REAL de
   // aquisição (p.Vreal) é o custo econômico efetivo — entra no fluxo e na permuta.
-  // Vazio significa "igual ao declarado", de modo que preencher só o declarado
+  // Vazio significa "igual ao valor para fins de instrumentos"; o rótulo mantém a forma curta "igual ao declarado"
   // reproduz exatamente o comportamento anterior.
   { const raw=$('Vreal')?$('Vreal').value.trim():''; p.Vreal=raw===''?p.V:Math.max(0,num('Vreal')); }
   p.cubR=num('cubR'); p.cubC=num('cubC'); p.BDI=num('BDI')/100;
@@ -2186,86 +2202,122 @@ function modelo(p){
   const cargaTotal=(_f1?_f1.area:0)*tensaoFund;                  // tf
 
   // ================= GARAGEM E VAGAS =================
-  // Lei 11.181/2019 — Anexo XII, Tabela 7.1, letra "a": não se computam 0,7 m²
-  // de área edificada para cada 1,0 m² de área líquida das unidades autônomas,
-  // e esse desconto é usado "nas áreas de uso comum" E "nas áreas destinadas a
-  // estacionamento de veículos leves e área de manobra". A garagem, portanto, é
-  // gratuita em potencial construtivo ATÉ o saldo que as áreas comuns deixarem.
+  // A quantidade de vagas e o programa residencial são interdependentes:
+  // garagem consome área; menos área residencial pode significar menos unidades;
+  // e o mínimo/teto normativo de vagas depende justamente da quantidade de
+  // unidades. Por isso a solução é feita de forma AUTO-CONSISTENTE, e não em
+  // uma única passagem.
   //
-  // OUS Somos Centro — art. 15, I: Ca = (ATE/1,7)/AT, sendo ATE "toda a área
-  // construída de uma edificação, medida externamente (área bruta)". O § 5º
-  // excetua apenas a letra "f" da Tabela 7.1, NÃO a letra "a": a garagem entra
-  // integralmente na ATE e compete metro a metro com a área vendável.
+  // Lei 11.181/2019 — Anexo XII, item 2.1:
+  //   residencial: regra geral 1/3; OP-3, Centralidade Regional ou QT<20: 1/5.
+  //   não residencial: 1/200 m², com dispensa até 500 m² (nota 1.e).
+  // A garagem pode aproveitar o desconto da Tabela 7.1, letra "a".
   //
-  // Vagas mínimas (Lei, Anexo XII, item 2.1, uso residencial):
-  //   regra geral ............................................ 1 a cada 3 un.
-  //   OP-3, Centralidade Regional ou quota praticada < 20 ..... 1 a cada 5 un.
-  //   Aeis-1 ................................................. 1 a cada 3 un.
-  //   não residencial ........................ 1 a cada 200 m² de área líquida
-  // Vagas na OUS (Anexo II, item 6): mínimo DISPENSADO; o que existe é TETO —
-  //   Subárea 1A ........... 1 a cada 2 un. + 1 a cada 100 m² não residencial
-  //   Subárea 1B e Área 2 .. 1 a cada 1 un. + 1 a cada 100 m² não residencial
+  // OUS Somos Centro — Anexo II, item 6:
+  //   mínimo de vagas: DISPENSADO;
+  //   teto: Subárea 1A = 1/2 unidade residencial + 1/100 m² não residencial;
+  //         Subárea 1B e Área 2 = 1/1 unidade residencial + 1/100 m² não residencial.
+  // Portanto o modo automático na OUS resulta em ZERO vaga; o teto apenas limita
+  // uma quantidade informada manualmente.
+
   const _qtPrat = p.QT>0 ? p.QT : Infinity;
-  // primeira passagem: estimativa de unidades a partir da vendável SEM garagem
   const _vendResid0=vendResid, _vendCom0=vendCom, _constr0=constr;
   const divResid = (!p.adere && (p.emOp3cr || _qtPrat<20)) ? 5 : 3;
   const ehSub1A  = (p.cenario||'').indexOf('1A')>=0;
-  // a contagem de unidades ainda não existe aqui: usa-se a estimativa de área
-  const _unEst = p.areaUnid>0 ? Math.floor(vendResid/p.areaUnid) : 0;
-  const vagasLeiMin = !p.adere
-    ? Math.ceil(_unEst/divResid) + Math.ceil(vendCom/200)
-    : 0;
-  const vagasOusMax = p.adere
-    ? Math.floor(_unEst/(ehSub1A?2:1)) + Math.floor(vendCom/100)
-    : Infinity;
-  const vagasRef = p.adere ? vagasOusMax : vagasLeiMin;
-  let nVagas = p.vagasModo==='zero' ? 0
-             : p.vagasModo==='manual' ? p.vagasN
-             : vagasRef;
-  if(p.adere) nVagas=Math.min(nVagas, vagasOusMax);      // teto da OUS
-  nVagas=Math.max(0,nVagas);
-  const areaGaragem = nVagas*p.mVaga;
-  // Na Lei, o desconto da letra "a" é consumido primeiro pelas áreas comuns.
-  const areaPriv   = vendResid+vendCom;
-  const areaComum  = Math.max(0, gross-areaPriv);
-  const descontoA  = !p.adere ? 0.7*areaPriv : 0;
-  const saldoGar   = Math.max(0, descontoA-areaComum);
-  const garNaoComp = !p.adere ? Math.min(areaGaragem, saldoGar) : 0;
-  const garComp    = Math.max(0, areaGaragem-garNaoComp);  // compete com a venda
-  const vagasGratis= p.mVaga>0 ? Math.floor(saldoGar/p.mVaga) : 0;
+  const divOusResid = ehSub1A ? 2 : 1;
+  const _unEst = p.areaUnid>0 ? Math.floor(_vendResid0/p.areaUnid) : 0;
 
-  // EFEITO SOBRE A ÁREA VENDÁVEL
-  //   OUS ....... a garagem ocupa ATE: a área que resta para unidades é
-  //               (bruta − garagem), e a relação bruta/privativa é mantida.
-  //   Lei ....... a parcela não computada é construída ADEMAIS do envelope
-  //               (custa obra, não consome coeficiente); o excedente compete.
-  // A garagem compete com os pavimentos RESIDENCIAIS. A parcela comercial —
-  // fachada ativa no térreo — é elemento de programa definido à parte e é
-  // preservada; a perda recai integralmente sobre a área residencial.
-  if(areaGaragem>0){
-    if(p.adere){
-      // OUS: a garagem está DENTRO da ATE; o que resta divide-se entre
-      // residencial e a fachada ativa já prevista no programa.
-      const vendTotNovo=Math.max(0, gross-areaGaragem)/p.brutaPriv;
-      vendCom   = Math.min(_vendCom0, vendTotNovo);
-      vendResid = Math.max(0, vendTotNovo-vendCom);
-      constr    = gross;
-    } else {
-      // Lei: a fachada ativa é área NÃO COMPUTADA, adicional ao envelope, e
-      // permanece intacta. Só a parcela de garagem que excede o desconto da
-      // letra "a" consome o potencial residencial.
-      vendResid = Math.max(0, gross-garComp)/p.brutaPriv;
-      constr    = _constr0 - garComp + areaGaragem;
+  // Calcula as áreas resultantes para uma quantidade hipotética de vagas.
+  // A parcela comercial é preservada: a garagem recai sobre o residencial.
+  const _areasComVagas=(nv)=>{
+    nv=Math.max(0,Math.floor(Number(nv)||0));
+    const areaGaragem=nv*p.mVaga;
+    const areaPriv0=_vendResid0+_vendCom0;
+    const areaComum0=Math.max(0,gross-areaPriv0);
+    const descontoA=!p.adere ? 0.7*areaPriv0 : 0;
+    const saldoGar=Math.max(0,descontoA-areaComum0);
+    const garNaoComp=!p.adere ? Math.min(areaGaragem,saldoGar) : 0;
+    const garComp=Math.max(0,areaGaragem-garNaoComp);
+    const vagasGratis=p.mVaga>0 ? Math.floor(saldoGar/p.mVaga) : 0;
+
+    let vr=_vendResid0, vc=_vendCom0, cc=_constr0;
+    if(areaGaragem>0){
+      if(p.adere){
+        // Na OUS a garagem integra a ATE. Mantém-se o programa comercial e a
+        // perda de área vendável recai sobre a parcela residencial.
+        const vendTotNovo=Math.max(0,gross-areaGaragem)/p.brutaPriv;
+        vc=Math.min(_vendCom0,vendTotNovo);
+        vr=Math.max(0,vendTotNovo-vc);
+        cc=gross;
+      }else{
+        // Na Lei, somente a parcela que excede o desconto da letra "a" consome
+        // potencial residencial; a fachada ativa não computada é preservada.
+        vr=Math.max(0,(gross-garComp)/p.brutaPriv);
+        vc=_vendCom0;
+        cc=_constr0-garComp+areaGaragem;
+      }
     }
-  }
+    return {vendResid:vr,vendCom:vc,constr:cc,areaGaragem,garNaoComp,garComp,vagasGratis};
+  };
+
+  // Unidades que efetivamente podem existir com aquela garagem. A quota limita
+  // apartamentos, nunca a área comercial.
+  const _unidadesComVagas=(a)=>{
+    const up=p.areaUnid>0 ? Math.floor(a.vendResid/p.areaUnid) : 0;
+    const uq=p.QT>0 ? Math.floor(Alote/p.QT) : Infinity;
+    return Math.max(0,Math.min(up,uq));
+  };
+
+  const _minLeiPara=(nv)=>{
+    const a=_areasComVagas(nv), un=_unidadesComVagas(a);
+    const res=Math.ceil(un/divResid);
+    const com=(a.vendCom>500+1e-9) ? Math.ceil(a.vendCom/200) : 0;
+    return res+com;
+  };
+  const vagasLeiMin = !p.adere ? (()=>{
+    const sup=_minLeiPara(0);
+    for(let n=0;n<=sup;n++) if(n>=_minLeiPara(n)) return n;
+    return sup;
+  })() : 0;
+
+  const _maxOusPara=(nv)=>{
+    if(!p.adere) return Infinity;
+    const a=_areasComVagas(nv), un=_unidadesComVagas(a);
+    return Math.floor(un/divOusResid)+Math.floor(a.vendCom/100);
+  };
+  const vagasOusMax = p.adere ? (()=>{
+    const sup=Math.max(0,_maxOusPara(0));
+    for(let n=sup;n>=0;n--) if(n<=_maxOusPara(n)) return n;
+    return 0;
+  })() : Infinity;
+  const _ousNoTeto = p.adere ? _areasComVagas(vagasOusMax) : null;
+  const vagasOusMaxUn = p.adere ? _unidadesComVagas(_ousNoTeto) : 0;
+  const vagasOusMaxRes = p.adere ? Math.floor(vagasOusMaxUn/divOusResid) : 0;
+  const vagasOusMaxCom = p.adere ? Math.floor(_ousNoTeto.vendCom/100) : 0;
+
+  let nVagas = p.vagasModo==='zero' ? 0
+             : p.vagasModo==='manual'
+               ? (p.adere ? Math.min(Math.max(0,Math.floor(p.vagasN||0)),vagasOusMax)
+                          : Math.max(0,Math.floor(p.vagasN||0)))
+               : (p.adere ? 0 : vagasLeiMin);
+
+  const _av=_areasComVagas(nVagas);
+  const areaGaragem=_av.areaGaragem;
+  const garNaoComp=_av.garNaoComp;
+  const garComp=_av.garComp;
+  const vagasGratis=_av.vagasGratis;
+  vendResid=_av.vendResid;
+  vendCom=_av.vendCom;
+  constr=_av.constr;
 
   // ---- UNIDADES E QUOTA DE TERRENO ----
   // Duas restrições concorrentes determinam o programa de unidades:
-  //   (a) a área vendável residencial dividida pela área média da unidade;
+  //   (a) a área vendável RESIDENCIAL dividida pela área média da unidade;
   //   (b) a quota de terreno — mínimo de lote por unidade habitacional.
-  // A quota NÃO reduz a área construída: reduz a quantidade de unidades em que
-  // essa área é dividida. Onde ela morde, a unidade média resultante é maior que
-  // a pretendida, e é esse tamanho efetivo que o mercado terá de absorver.
+  // A quota nunca incide sobre a área comercial. No modo "absorver", usa-se o
+  // potencial disponível e a área média das unidades cresce. No modo "produto",
+  // o tamanho-alvo é mantido e a quota reduz apenas o potencial RESIDENCIAL,
+  // podendo levar o CA praticado abaixo do máximo.
   // REDUÇÃO DA QUOTA PARA RECEPTOR DE UR (art. 21, § 1º, II da Subemenda 112/2026):
   // atingida a METADE do percentual de superação admitido — 20% em OP-3 e
   // Centralidade Regional fora da abrangência, 10% nas demais zonas —, o
@@ -2371,7 +2423,7 @@ function modelo(p){
   // Arborização exigida na OUS: uma árvore a cada p.arbStep metros de testada,
   // arredondada para cima por ser piso normativo.
   const nArvores=(p.adere&&p.arbStep>0)?Math.max(1,Math.ceil(p.testada/p.arbStep)):0;
-  const AT=Alote, valTer=AT*p.V;          // base dos instrumentos (declarado)
+  const AT=Alote, valTer=AT*p.V;          // base para fins de instrumentos
   const valTerReal=AT*p.Vreal;            // custo econômico efetivo (pago)
   // Potencial construtivo total segundo o coeficiente praticado. Em AEIS-1 o
   // coeficiente incide sobre a área BRUTA; nas demais zonas, sobre a computável.
@@ -2567,7 +2619,8 @@ function modelo(p){
     nVagas,areaGaragem,garNaoComp,garComp,vagasGratis,vagasLeiMin,divResid,unEstVagas:_unEst,
     esbeltez,profFund,tensaoFund,cargaTotal,alturaEd,menorLado,
     esbMax:p.esbMax,fundMax:p.fundMax,cargaPav:p.cargaPav,
-    vagasOusMax:(vagasOusMax===Infinity?null:vagasOusMax),vagasModo:p.vagasModo,mVaga:p.mVaga,
+    vagasOusMax:(vagasOusMax===Infinity?null:vagasOusMax),vagasOusMaxRes,vagasOusMaxCom,vagasOusMaxUn,
+    vagasModo:p.vagasModo,mVaga:p.mVaga,
     cegaEsq:p.cegaEsq,cegaDir:p.cegaDir,trechos:(G&&G.trechos)||null,nArvores,valTerReal,Vreal:p.Vreal,potencialCA,onerav,dispensaTDC,tdcArea,isentaAFP,isentaHIS,isentaFA,isenta,isentaExcedente,odcArea,odcCheia,isencao,odc,tdc,
     FRv,AGT,areaGeradora,urRec,caSuper,AER,urDesp,pagaDespUR,autoAplica,urAutoQtd,urAutoValor,
     supURInoperante,supURParcial,supExerc,usarAMIS,amis,
@@ -2639,9 +2692,9 @@ function aplicarNaUI(p,R){
                + ` em menos apartamentos, que saem maiores (${nu(R.areaUnid)} m² pretendidos`
                + ` contra ${nu(R.areaUnidEfetiva)} m² efetivos).`;
         if(R.potencialOcioso>0.5)
-          prog += ` Mantido o produto de ${nu(R.areaUnid)} m², a quota deixa`
-               + ` <b>${nu(R.potencialOcioso)} m²</b> de potencial construtivo sem uso`
-               + ` — metros que o coeficiente permitiria, mas que não podem virar unidades.`;
+          prog += ` Fixado o produto em ${nu(R.areaUnid)} m², a quota deixa`
+               + ` <b>${nu(R.potencialOcioso)} m²</b> de potencial construtivo sem uso.`
+               + ` A redução incide somente sobre a parcela residencial; a área comercial é preservada.`;
       } else if(R.vendResid>0){
         prog = ` Área vendável insuficiente para uma unidade de ${nu(R.areaUnid)} m².`;
       }
@@ -2700,14 +2753,19 @@ function aplicarNaUI(p,R){
       if(R.nVagas<=0){
         hv.className='hint';
         hv.innerHTML = p.adere
-          ? 'Sem garagem. Na OUS o atendimento mínimo é dispensado (Anexo II, item 6.1).'
+          ? `Sem garagem. Na OUS o atendimento mínimo é <b>dispensado</b> (Anexo II, item 6.1). `
+            +`O item 6.2 define apenas um teto; para este programa, o máximo auto-consistente é <b>${R.vagasOusMax||0}</b> vagas.`
           : 'Sem garagem. Confira se o uso está dispensado pelas notas do item 2.1 do Anexo XII.';
       } else if(p.adere){
         hv.className='hint hintAlerta';
+        const regraRes=(p.cenario||'').indexOf('1A')>=0?'1 vaga a cada 2 unidades':'1 vaga por unidade';
         hv.innerHTML = `<b>${R.nVagas} vagas</b> ocupam <b>${n0(R.areaGaragem)} m²</b> da Área Total Edificada.`
-          + ` Na OUS o coeficiente é Ca = (ATE ÷ 1,7) ÷ AT e a garagem <b>não tem desconto</b>:`
-          + ` cada metro de vaga é um metro a menos de área vendável.`
-          + (R.vagasOusMax!=null?` Teto do Anexo II, item 6.2: <b>${R.vagasOusMax}</b> vagas.`:'');
+          + ` Na OUS o mínimo é <b>dispensado</b>; estas vagas existem por opção do estudo.`
+          + ` Como a garagem integra a ATE, cada vaga reduz a área disponível para o programa.`
+          + (R.vagasOusMax!=null
+              ? ` O teto auto-consistente do Anexo II, item 6.2 é <b>${R.vagasOusMax}</b> vagas`
+                + ` (${regraRes} + 1 vaga/100 m² não residenciais; no teto: ${R.vagasOusMaxRes} residenciais + ${R.vagasOusMaxCom} não residenciais).`
+              : '');
       } else {
         hv.className='hint';
         hv.innerHTML = `<b>${R.nVagas} vagas</b> em <b>${n0(R.areaGaragem)} m²</b>.`
@@ -3998,7 +4056,7 @@ function initBuscaParam(){
     supUR:'superacao coeficiente maximo ur adicional',
     pctCA:'coeficiente aproveitamento ca potencial construtivo',
     faModo:'fachada ativa isencao termo',
-    V:'valor terreno declarado instrumentos base calculo',
+    V:'valor terreno instrumentos base calculo valor para fins de instrumentos',
     Vreal:'valor terreno real aquisicao custo efetivo permuta',
     his1Tot:'habitacao interesse social his1 faixa',
     his2Tot:'habitacao interesse social his2 faixa',
@@ -4637,16 +4695,78 @@ CAMPOS_PADRAO.forEach(id=>{
 
 // ============ FASE 9: PERSISTÊNCIA, EXPORTAÇÃO E COMPARAÇÃO ============
 const STORE_KEY='ous_painel_estado_v1';
-// Coleta todos os campos editáveis da barra lateral, mais o modo e a rotação da vista.
+const CSV_SCHEMA='2';
+// Controles de interface que podem estar dentro de #inputs, mas não são premissas
+// do estudo e portanto não devem contaminar o CSV.
+const CAMPOS_NAO_PERSISTENTES=new Set(['paramFind']);
+// Campos calculados exibidos na barra lateral. Eles são salvos para auditoria e
+// conferência da linha, mas no carregamento a fonte da verdade são as premissas que
+// os geram; por isso não entram na verificação ESTRITA do round-trip.
+const CAMPOS_DERIVADOS_PERSISTENCIA=new Set([
+  'area','caApl','pctCom','hisA2','hisB1','hisLivre','pctRep','urBai'
+]);
+// Campos que o motor sugere automaticamente conforme zona/cenário/tipo. Ao abrir
+// um CSV, o valor gravado no estudo precisa prevalecer no PRIMEIRO recálculo; sem
+// esta marca o sincronizador substituía silenciosamente valores como V, preços,
+// QT, B, VL e AFP pelos presets atuais.
+const CAMPOS_PRESET_EDITAVEL=['V','pApto','pCom','AFP','VL','Bh','QT','areaUnid'];
+const PROPS_PRESET=['_userEdited','_zonaSet','_cenaSet','_tipoSet','_lastZona','_bSet'];
+function camposPersistiveis(){
+  return [...document.querySelectorAll('#inputs input[id], #inputs select[id]')]
+    .filter(el=>el.type!=='file' && !CAMPOS_NAO_PERSISTENTES.has(el.id));
+}
+// Coleta todos os campos do ESTUDO na barra lateral, mais o marco regulatório.
+// Rotação/zoom, busca, estado de abas e parâmetros do módulo VRT são estado de
+// interface/análise auxiliar e deliberadamente não fazem parte do estudo salvo.
 function coletarParams(){
   const p={};
-  document.querySelectorAll('#inputs input, #inputs select').forEach(el=>{
-    if(!el.id) return;
-    // caixas de seleção exportam o estado marcado; o atributo value não muda
+  camposPersistiveis().forEach(el=>{
     p[el.id] = (el.type==='checkbox') ? (el.checked?'1':'0') : el.value;
   });
   p.__modo = document.querySelector('.modeSel .mode.active')?.dataset.mode || 'ous';
   return p;
+}
+function _capturarMarcasPreset(){
+  const out={};
+  CAMPOS_PRESET_EDITAVEL.forEach(id=>{const e=$(id); if(!e) return; out[id]={};
+    PROPS_PRESET.forEach(k=>{ if(Object.prototype.hasOwnProperty.call(e,k)) out[id][k]=e[k]; });
+  });
+  return out;
+}
+function _restaurarMarcasPreset(snap){
+  CAMPOS_PRESET_EDITAVEL.forEach(id=>{const e=$(id); if(!e) return;
+    PROPS_PRESET.forEach(k=>{try{delete e[k];}catch(_){}});
+    if(snap&&snap[id]) Object.entries(snap[id]).forEach(([k,v])=>e[k]=v);
+  });
+}
+function _marcarPremissasImportadas(p){
+  CAMPOS_PRESET_EDITAVEL.forEach(id=>{
+    if(!(id in (p||{}))) return;
+    const e=$(id); if(e) e._userEdited=true;
+  });
+}
+function _valorCampoEquiv(el,a,b){
+  a=(a==null?'':String(a)); b=(b==null?'':String(b));
+  if(el.type==='checkbox'){
+    const norm=v=>(v===true||v===1||v==='1'||String(v).toLowerCase()==='true'||String(v).toLowerCase()==='sim')?'1':'0';
+    return norm(a)===norm(b);
+  }
+  if(el.type==='number'){
+    if(a.trim()===''||b.trim()==='') return a.trim()===b.trim();
+    const x=Number(a), y=Number(b);
+    return Number.isFinite(x)&&Number.isFinite(y) ? Math.abs(x-y)<=1e-9 : a===b;
+  }
+  return a===b;
+}
+function _divergenciasCarga(p){
+  const atual=coletarParams(), out=[];
+  camposPersistiveis().forEach(el=>{
+    if(el.readOnly || CAMPOS_DERIVADOS_PERSISTENCIA.has(el.id) || !(el.id in (p||{}))) return;
+    if(!_valorCampoEquiv(el,p[el.id],atual[el.id])) out.push({id:el.id,esperado:p[el.id],obtido:atual[el.id]});
+  });
+  if('__modo' in (p||{}) && String(p.__modo)!==String(atual.__modo))
+    out.push({id:'__modo',esperado:p.__modo,obtido:atual.__modo});
+  return out;
 }
 // Aplica um conjunto de parâmetros. silencioso=true evita recalcular a cada campo.
 function aplicarParams(p, semCalcular){
@@ -4680,6 +4800,28 @@ function aplicarParams(p, semCalcular){
   _aplicandoPadrao=false;
   try{ updateVisibility(); }catch(e){}
   if(!semCalcular) compute();
+}
+// Transação própria para um estudo vindo de CSV. Ela limpa marcas residuais do
+// estudo anterior, aplica a linha, transforma os campos com preset em premissas
+// explícitas e só então recalcula. Em modo estrito, qualquer campo EDITÁVEL que
+// não sobreviva ao recálculo cancela a carga e o estado anterior é restaurado.
+function aplicarEstudoImportado(p, estrito){
+  const antes=coletarParams(), marcasAntes=_capturarMarcasPreset();
+  try{
+    _limparMarcas();
+    aplicarParams(p,true);
+    _marcarPremissasImportadas(p);
+    compute();
+    const dif=_divergenciasCarga(p);
+    if(estrito && dif.length){
+      const d=dif.slice(0,8).map(x=>`${x.id}: ${x.esperado} → ${x.obtido}`).join('; ');
+      throw new Error('A conferência de integridade detectou campo(s) alterado(s) após o recálculo: '+d);
+    }
+    return dif;
+  }catch(err){
+    _limparMarcas(); aplicarParams(antes,true); _restaurarMarcasPreset(marcasAntes); compute();
+    throw err;
+  }
 }
 // --- persistência automática no navegador ---
 let _saveTimer=null;
@@ -4739,13 +4881,16 @@ function _csvParse(text,sep){
   return rows.filter(r=>r.some(v=>String(v).trim()!==''));
 }
 function montarEstudoCSV(){
-  const par=coletarParams();
+  // Primeiro sincroniza e calcula. Só depois captura as entradas: assim campos
+  // derivados, presets legais e resultados pertencem exatamente ao mesmo estado.
   try{ compute(); }catch(e){}
+  const par=coletarParams();
   const A=_lastAudit;
-  const cab=['identificacao','modelo_versao','emitido','impressao','cenario_rotulo'];
-  const val=[String(par.projetoId||'').trim(),MODELO.versao,new Date().toISOString(),
+  const nCampos=Object.keys(par).filter(k=>k!=='projetoId').length+1; // + identificação
+  const cab=['identificacao','csv_schema','modelo_versao','campos_persistidos','emitido','impressao','cenario_rotulo'];
+  const val=[String(par.projetoId||'').trim(),CSV_SCHEMA,MODELO.versao,nCampos,new Date().toISOString(),
              impressaoParams(par),$('cenario')?.options[$('cenario').selectedIndex]?.textContent||''];
-  // Todos os controles da barra lateral viram colunas planas. A identificação é
+  // Todos os campos persistíveis do estudo viram colunas planas. A identificação é
   // deliberadamente a primeira coluna e não é repetida como projetoId.
   Object.keys(par).forEach(k=>{
     if(k==='projetoId') return;
@@ -4755,6 +4900,13 @@ function montarEstudoCSV(){
     const saidas={
       resultado_areaConstruida:Math.round(A.constr),
       resultado_areaVendavel:Math.round(A.vendResid+A.vendCom),
+      resultado_areaResidencial:Math.round(A.vendResid),
+      resultado_areaComercial:Math.round(A.vendCom),
+      resultado_unidades:A.nUnidades,
+      resultado_areaUnidEfetiva:+A.areaUnidEfetiva.toFixed(2),
+      resultado_vagas:A.nVagas,
+      resultado_vagasOusMax:A.vagasOusMax==null?'':A.vagasOusMax,
+      resultado_QTefetiva:+(A.QTefetiva||0).toFixed(4),
       resultado_caPraticado:+A.caPrat.toFixed(4),
       resultado_lucro:Math.round(A.lucro),
       resultado_margem_pct:+(A.margem*100).toFixed(2),
@@ -4795,7 +4947,13 @@ function interpretarEstudoCSV(text){
   });
   const reconhecidos=Object.keys(p).filter(k=>k==='__modo'||k==='projetoId'||$(k));
   if(reconhecidos.length<2) throw new Error('CSV não contém campos reconhecidos pelo painel.');
-  return {parametros:p,modeloVersao:obj.modelo_versao||'',linhasDados:rows.length-1};
+  const atuais=camposPersistiveis().filter(el=>el.id!=='projetoId' && !el.readOnly && !CAMPOS_DERIVADOS_PERSISTENCIA.has(el.id)).map(el=>el.id);
+  const faltantes=atuais.filter(id=>!head.includes(id));
+  return {
+    parametros:p,modeloVersao:obj.modelo_versao||'',csvSchema:obj.csv_schema||'',
+    camposPersistidos:parseInt(obj.campos_persistidos||'0',10)||0,
+    linhasDados:rows.length-1,cabecalhos:head,faltantes
+  };
 }
 function lerArquivoCSV(file){
   return new Promise((res,rej)=>{
@@ -4804,13 +4962,20 @@ function lerArquivoCSV(file){
       const d=interpretarEstudoCSV(fr.result);
       if(d.modeloVersao && d.modeloVersao!==MODELO.versao)
         avisar(`Estudo gerado pela versão <b>${d.modeloVersao}</b> do modelo; esta é a <b>${MODELO.versao}</b>. `
-          +`As premissas foram carregadas, mas os resultados podem divergir do arquivo original — `
-          +`correções de modelagem aplicadas entre as versões alteram o cálculo.`,'warn');
+          +`As premissas reconhecidas serão preservadas, mas resultados e campos derivados podem mudar por correções de modelagem.`,'warn');
       else if(!d.modeloVersao)
-        avisar('CSV sem carimbo de versão. Premissas carregadas; confira os resultados contra o documento original.','warn');
+        avisar('CSV sem carimbo de versão. Os campos reconhecidos serão carregados; confira o estudo contra o documento original.','warn');
+      if(d.csvSchema && d.csvSchema!==CSV_SCHEMA)
+        avisar(`O arquivo usa o esquema CSV <b>${d.csvSchema}</b>; esta versão usa o esquema <b>${CSV_SCHEMA}</b>. A carga será feita em modo compatibilidade.`,'warn');
+      if(d.faltantes.length){
+        const msg=d.faltantes.slice(0,10).join(', ')+(d.faltantes.length>10?'…':'');
+        if(d.modeloVersao===MODELO.versao && d.csvSchema===CSV_SCHEMA)
+          throw new Error('CSV da versão atual está incompleto. Campo(s) ausente(s): '+msg);
+        avisar(`CSV legado/incompleto: <b>${d.faltantes.length}</b> campo(s) editável(is) da versão atual não estão no arquivo (${msg}). Eles manterão/reassumirão os valores da versão atual.`,'warn');
+      }
       if(d.linhasDados>1)
         avisar(`O CSV contém <b>${d.linhasDados}</b> linhas de estudos. Foi carregada a primeira linha de dados.`,'warn');
-      res(d.parametros);
+      res(d);
     }catch(e){ rej(new Error('Arquivo CSV inválido: '+e.message)); } };
     fr.onerror=()=>rej(new Error('Falha ao ler o arquivo.'));
     fr.readAsText(file,'UTF-8');
@@ -4910,9 +5075,11 @@ function aplicarPreset(k, semCalcular){
   return pr;
 }
 // Calcula um cenário sem perturbar o estado da aba Análise.
-function calcularCenario(params){
-  const atual=coletarParams();
+function calcularCenario(params, exato){
+  const atual=coletarParams(), marcasAtuais=_capturarMarcasPreset();
+  _limparMarcas();
   aplicarParams(params, true);
+  if(exato) _marcarPremissasImportadas(params);
   let out=null;
   try{
     _lightRender=false; compute();
@@ -4929,7 +5096,8 @@ function calcularCenario(params){
       metricas: colherMetricas()
     };
   }catch(e){}
-  aplicarParams(atual, true); compute();
+  _limparMarcas();
+  aplicarParams(atual, true); _restaurarMarcasPreset(marcasAtuais); compute();
   return out;
 }
 // Coleta os parâmetros visíveis com rótulo e seção, para exibição na comparação.
@@ -5069,7 +5237,11 @@ function renderDelta(){
   $('expBtn').onclick=exportarCSV;
   $('impFile').addEventListener('change',async e=>{
     const f=e.target.files[0]; if(!f) return;
-    try{ aplicarParams(await lerArquivoCSV(f)); $('modalAbrir').classList.remove('show'); }
+    try{ const d=await lerArquivoCSV(f);
+      const estrito=(d.modeloVersao===MODELO.versao && d.csvSchema===CSV_SCHEMA);
+      const dif=aplicarEstudoImportado(d.parametros,estrito);
+      if(dif.length && !estrito) avisar(`Carga compatível concluída, com ${dif.length} campo(s) ajustado(s) pelas regras da versão atual.`,'warn');
+      $('modalAbrir').classList.remove('show'); }
     catch(err){ avisar('Não foi possível ler o arquivo: '+err.message,'warn'); }
     e.target.value='';
   });
@@ -5115,8 +5287,8 @@ function renderDelta(){
       const f=e.target.files[0]; if(!f) return;
       const slot=inp.closest('.cmpCol').dataset.slot;
       try{
-        const p=await lerArquivoCSV(f);
-        _cmp[slot]=calcularCenario(p);
+        const d=await lerArquivoCSV(f);
+        _cmp[slot]=calcularCenario(d.parametros,true);
         inp.closest('.cmpCol').querySelector('.cmpPreset').value='';
         renderSlot();
       }catch(err){ alert(err.message); }
@@ -5168,7 +5340,7 @@ function buildAuditoria(){
     <tr><td>Pé-direito</td><td class="n">${n2(P.peDir)} m</td></tr>
     <tr><td>Coeficiente básico (CA<sub>bás</sub>)</td><td class="n">${n2(A.CAbas)}</td></tr>
     <tr><td>Coeficiente aplicável (CA<sub>apl</sub>)</td><td class="n">${n2(A.caApl)}</td></tr>
-    <tr><td>Valor declarado do terreno (instrumentos)</td><td class="n">${rs(A.V)}/m²</td></tr>
+    <tr><td>Valor do terreno para fins de instrumentos</td><td class="n">${rs(A.V)}/m²</td></tr>
     ${Math.abs(A.Vreal-A.V)>0.5?`<tr><td>Valor real de aquisição (fluxo e permuta)</td><td class="n">${rs(A.Vreal)}/m²</td></tr>`:''}
   </tbody></table>`;
 
@@ -5185,16 +5357,19 @@ function buildAuditoria(){
     `${n2((A.G.floors[0]||{}).width||0)} m no térreo`,
     'O efeito cresce com a altura, pois o afastamento dispensado é o da Regra do H, que aumenta com H. Em lotes estreitos costuma ser a diferença entre atingir ou não o coeficiente máximo.');
   if(A.nUnidades!==undefined) h+=et('Programa de unidades e quota de terreno',
-    'O número de unidades resulta de duas restrições concorrentes: a área vendável residencial dividida pela área média pretendida, e a quota de terreno — mínimo de lote por unidade habitacional. A quota não reduz a área construída; reduz a quantidade de unidades em que ela é dividida, de modo que as unidades resultantes são maiores.',
-    'Unidades = mín( Vendável ÷ Área da unidade ; AT ÷ Quota )',
+    A.QTmodo==='produto'
+      ? 'A quota limita exclusivamente a quantidade de unidades habitacionais. Com tamanho de unidade fixado, o painel preserva a parcela comercial e reduz apenas o potencial residencial; por isso o CA praticado pode ficar abaixo do máximo.'
+      : 'A quota limita exclusivamente a quantidade de unidades habitacionais. Neste modo, o painel procura utilizar o potencial disponível e distribui a área residencial entre o número de unidades permitido pela quota, fazendo a área média resultante aumentar.',
+    'Unidades = mín( Vendável residencial ÷ Área da unidade ; AT ÷ Quota )',
     `mín( ${m2e(A.vendResid)} ÷ ${n2(A.areaUnid)} ; ${m2e(A.Alote)} ÷ ${A.QT>0?n2(A.QT):'—'} )`
       + ` = mín( ${A.unPotencial} ; ${A.unQuota!==null?A.unQuota:'sem quota'} )`,
     `${A.nUnidades} unidade(s) de ${n2(A.areaUnidEfetiva)} m² em média`,
     A.quotaMorde
-      ? `<b>A quota é o limitante</b>: corta ${A.unPerdidas} unidade(s) em relação ao potencial de área. `
-        +`A unidade média sobe de ${n2(A.areaUnid)} m² para ${n2(A.areaUnidEfetiva)} m², o que precisa ser compatível com o público-alvo e com a composição de HIS.`
+      ? (A.QTmodo==='produto'
+          ? `<b>A quota é o limitante</b>. O produto residencial foi mantido próximo de ${n2(A.areaUnid)} m²/unidade; a área comercial foi preservada e ${m2(A.potencialOcioso)} de potencial ficaram sem uso.`
+          : `<b>A quota é o limitante</b>: corta ${A.unPerdidas} unidade(s) em relação ao potencial de área. A área residencial é redistribuída e a unidade média passa de ${n2(A.areaUnid)} m² pretendidos para ${n2(A.areaUnidEfetiva)} m² efetivos.`)
       : `O limitante é a <b>área vendável</b>; a quota de terreno não restringe este programa.`);
-  if(A.nVagas>0) h+=et('Garagem e vagas de estacionamento',
+  if(A.nVagas>0 || A.p.adere) h+=et('Garagem e vagas de estacionamento',
     A.p.adere
       ? 'Na OUS o coeficiente incide sobre a Área Total Edificada — toda a área construída medida externamente (art. 15, I). O § 5º excetua apenas a letra "f" da Tabela 7.1, de modo que a garagem NÃO goza do desconto da letra "a": ela compete metro a metro com a área vendável.'
       : 'Na Lei 11.181/2019 a Tabela 7.1, letra "a", não computa 0,7 m² de área edificada para cada 1,0 m² de área líquida das unidades autônomas, utilizáveis nas áreas de uso comum e nas áreas de estacionamento e manobra. As áreas comuns consomem o desconto primeiro; o saldo abriga a garagem sem custo de potencial.',
@@ -5204,8 +5379,10 @@ function buildAuditoria(){
     A.p.adere ? m2(A.areaGaragem)+' consumidos da ATE'
               : m2(A.garNaoComp)+' não computados · '+m2(A.garComp)+' computados',
     A.p.adere
-      ? (A.vagasOusMax!=null?`Teto do Anexo II, item 6.2: ${A.vagasOusMax} vagas. O mínimo é dispensado (item 6.1).`:'')
-      : `Mínimo da Tabela 2.1 do Anexo XII: 1 vaga a cada ${A.divResid} unidades residenciais e 1 a cada 200 m² de área líquida não residencial.`);
+      ? (A.nVagas===0
+          ? `Mínimo dispensado pelo item 6.1. O item 6.2 funciona apenas como teto; máximo auto-consistente neste programa: ${A.vagasOusMax} vagas.`
+          : `Vagas adotadas por opção do estudo. Teto auto-consistente do item 6.2: ${A.vagasOusMax} vagas (${A.vagasOusMaxRes} da parcela residencial + ${A.vagasOusMaxCom} da parcela não residencial).`)
+      : `Mínimo da Tabela 2.1 do Anexo XII: 1 vaga a cada ${A.divResid} unidades residenciais; para a parcela não residencial, aplica-se 1/200 m² quando superados 500 m².`);
   // Corte e planta no memorial: vetorial, imprime sem perda e vem da mesma
   // geometria do cálculo — o documento e a tela não podem divergir.
   try{
@@ -5420,7 +5597,7 @@ function buildAuditoria(){
       + (A.permFisica?` ; ${rs(A.vgvBruto)} − ${rs(A.vgvPermuta)}`:''),
     rs(A.permFisica?A.vgvDisp:A.vgvPermuta),
     'A permuta é calculada sobre o valor REAL de aquisição do terreno'
-    +(Math.abs(A.Vreal-A.V)>0.5?` (${rs(A.Vreal)}/m², distinto do declarado ${rs(A.V)}/m²)`:'')
+    +(Math.abs(A.Vreal-A.V)>0.5?` (${rs(A.Vreal)}/m², distinto do valor para fins de instrumentos ${rs(A.V)}/m²)`:'')
     +'. As unidades entregues valem, em VGV, mais que o valor em dinheiro do terreno — daí o fator de permuta.');
 
   // ---------- 6. Custos ----------
@@ -5856,7 +6033,7 @@ $('pdfBtn').addEventListener('click',()=>{ buildReport(); setTimeout(()=>window.
 // perceba. O bloco abaixo carimba tudo o que determina o resultado.
 
 const MODELO={
-  versao:'5.12.0',
+  versao:'5.14.0',
   marcos:{
     lei:'Lei Municipal nº 11.181/2019 (Plano Diretor de Belo Horizonte)',
     ous:'PL nº 574/2025 — Operação Urbana Simplificada Somos Centro (substitutivo)',
@@ -5864,6 +6041,8 @@ const MODELO={
     nbr:'NBR 12721 (área equivalente de construção) · NBR 14653 (não aplicada)'
   },
   historico:[
+    ['5.14.0','Persistência CSV reforçada para round-trip fiel. A exportação passa a sincronizar/recalcular antes de capturar os campos; controles de interface que não são premissas (como a busca de parâmetros) deixam de ser serializados. Na importação, os valores carregados que possuem presets automáticos são tratados como premissas explícitas do estudo, impedindo que zona, cenário ou tipo os sobrescrevam no primeiro recálculo. Arquivos da mesma versão/esquema são verificados após a carga e uma divergência em campo editável interrompe a importação e restaura o estado anterior. O CSV passa a declarar versão de esquema e quantidade de campos persistidos.'],
+    ['5.13.0','Correção conjunta de vagas e quota. Na OUS, o modo automático passa a adotar zero vaga, pois o mínimo é dispensado; o item 6.2 é tratado exclusivamente como teto da quantidade informada. O teto passa a ser resolvido de forma auto-consistente, recalculando unidades após a área consumida pela própria garagem; na Lei, o mínimo também é resolvido contra o programa final e passa a respeitar a dispensa de uso não residencial até 500 m². Na quota, o modo de tamanho fixo preserva integralmente a parcela comercial e limita somente o potencial residencial, reduzindo o CA praticado quando a quota impede transformar o potencial em apartamentos; o modo de aproveitamento mantém o potencial e faz a área média da unidade resultar da quota.'],
     ['5.12.0','Identificação do estudo e interoperabilidade por CSV. A barra lateral recebe campo livre para nome, código ou referência do projeto/terreno, preservado ao aplicar cenários pré-definidos e exibido no relatório e no memorial. O salvamento/carregamento externo deixa de usar JSON e passa a usar CSV plano: a primeira coluna é a identificação, cada controle do painel ocupa sua própria coluna e os principais resultados são anexados ao fim da linha. A exportação usa ponto e vírgula e BOM UTF-8 para compatibilidade com Excel em português; a importação aceita ponto e vírgula, vírgula ou tabulação e alerta quando o arquivo foi gerado por outra versão do modelo.'],    ['5.11.2','Fachada cega na divisa passa a ser exclusiva de torre única. Ao selecionar dois ou mais blocos, as opções esquerda/direita são desmarcadas antes do cálculo e ficam visualmente indisponíveis; ao retornar para uma torre, tornam-se editáveis novamente sem restaurar marcações antigas. A leitura dos parâmetros também força a dispensa lateral a falso em múltiplas torres, protegendo importações e presets legados.'],
     ['5.11.1','Correção do prumo no arranjo de múltiplas torres ao longo da testada. Os eixos de cada torre passam a ser fixados no primeiro pavimento e cada bloco encolhe simetricamente sobre o próprio eixo. A correção atua sobretudo quando a OUS faz a distância mínima exigida entre blocos atingir o teto de 10 m enquanto os afastamentos laterais continuam crescendo: antes as faces internas ficavam presas ao vão mínimo e as torres externas transladavam lateralmente. O vão real agora pode superar o mínimo regulatório para preservar o prumo. Torre única, fórmulas de afastamento, taxa de ocupação, coeficientes, receitas, custos e demais módulos permanecem inalterados.'],
     ['5.11.0','Cada bloco passa a ter o seu próprio perfil de altura. Os eixos dos vãos são fixados no térreo; a cada altura o bloco recua com o afastamento do lote e abre o vão exigido, encolhendo sobre si mesmo. Quando deixa de comportar a dimensão mínima, o bloco não existe acima daquele nível — em vez de deformar o conjunto para manter todos iguais. O teto de coeficiente passa a reduzir a ALTURA dos blocos, e não a planta de todos: o último nível recebe apenas os blocos que ainda cabem no potencial. A geometria dos desenhos deixou de ser recalculada e passou a ser LIDA do gerador, de modo que 3D, corte, planta e análise de viabilidade consomem o mesmo objeto.'],
@@ -6042,7 +6221,7 @@ function VRT_ALAVANCAS(){
   return [
     {id:'Vreal', grupo:'mercado', rot:'Valor real do terreno', un:'R$/m²',
      lo:0, hi:Math.max((v('Vreal')||v('V'))*3,3000), fmt:x=>'R$ '+Math.round(x).toLocaleString('pt-BR')+'/m²',
-     ov:x=>({Vreal:String(Math.round(x))}), nota:'custo máximo de aquisição que o negócio suporta — instrumentos fixos no declarado'},
+     ov:x=>({Vreal:String(Math.round(x))}), nota:'custo máximo de aquisição que o negócio suporta — instrumentos fixos no valor para fins de instrumentos'},
     {id:'pApto', grupo:'mercado', rot:'Preço de venda', un:'R$/m² priv.',
      lo:v('pApto')*0.5, hi:v('pApto')*2.2, fmt:x=>'R$ '+Math.round(x).toLocaleString('pt-BR')+'/m²',
      ov:x=>({pApto:String(Math.round(x)), pCom:String(Math.round(v('pCom')*x/(v('pApto')||1)))}),
@@ -6712,12 +6891,25 @@ function rodarTestes(){
         E.cabecalhos[0]+' = '+E.valores[0],E.cabecalhos[0]==='identificacao'&&E.valores[0]==='CUIS Centro; lote 03','identificacao na 1ª coluna');
       T('11. Bloco 4','CSV carimba a versão do modelo',
         E.valores[E.cabecalhos.indexOf('modelo_versao')],E.valores[E.cabecalhos.indexOf('modelo_versao')]===MODELO.versao,MODELO.versao);
+      T('11. Bloco 4','CSV declara esquema de persistência',
+        E.valores[E.cabecalhos.indexOf('csv_schema')],E.valores[E.cabecalhos.indexOf('csv_schema')]===CSV_SCHEMA,CSV_SCHEMA);
+      T('11. Bloco 4','Busca de parâmetros não contamina o CSV',
+        E.cabecalhos.includes('paramFind')?'presente':'ausente',!E.cabecalhos.includes('paramFind'),'ausente');
       T('11. Bloco 4','Todos os controles da barra lateral viram colunas do CSV',
-        E.cabecalhos.length+' colunas',Array.from(document.querySelectorAll('#inputs input[id],#inputs select[id]')).every(x=>x.id==='projetoId'||E.cabecalhos.includes(x.id)),'todos presentes');
+        E.cabecalhos.length+' colunas',camposPersistiveis().every(x=>x.id==='projetoId'||E.cabecalhos.includes(x.id)),'todos os campos do estudo presentes');
       T('11. Bloco 4','CSV faz round-trip de identificação e premissas',
         P.parametros.projetoId+' · '+P.parametros.testada,P.parametros.projetoId==='CUIS Centro; lote 03'&&P.parametros.testada===coletarParams().testada,'id e testada preservados');
       T('11. Bloco 4','CSV registra resultados apurados em colunas próprias',
         E.cabecalhos.filter(x=>x.indexOf('resultado_')===0).length+' resultados',E.cabecalhos.filter(x=>x.indexOf('resultado_')===0).length>=7,'≥ 7');
+      // round-trip real: valores com presets automáticos não podem ser trocados no primeiro compute
+      const rt=Object.assign({},coletarParams(),{__modo:'ous',cenario:'OUS – Subárea 1B',zona:'OM-2',tipo:'7',
+        V:'4321',Vreal:'3210',pApto:'7654',pCom:'6543',QT:'17',Bh:'7',VL:'0.42',AFP:'13'});
+      aplicarEstudoImportado(rt,true);
+      const rr=coletarParams();
+      T('11. Bloco 4','Carga exata preserva valores sujeitos a presets automáticos',
+        `V ${rr.V} · Vreal ${rr.Vreal} · apto ${rr.pApto} · QT ${rr.QT} · B ${rr.Bh}`,
+        rr.V==='4321'&&rr.Vreal==='3210'&&rr.pApto==='7654'&&rr.pCom==='6543'&&rr.QT==='17'&&rr.Bh==='7'&&rr.VL==='0.42'&&rr.AFP==='13',
+        'todos idênticos ao CSV');
       $('projetoId').value=id0; }
     // cronogramas parametrizados
     const cA=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OP-3',tipo:'0',
@@ -6916,19 +7108,19 @@ function rodarTestes(){
       'classificação sem eficiência implícita');
     // valor declarado × real
     c=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OP-3',tipo:'0',V:'6500'});
-    T('15. v4.8','Valor real vazio recai sobre o declarado',
+    T('15. v4.8','Valor real vazio recai sobre o valor para fins de instrumentos',
       `${Math.round(c.A.V)} · ${Math.round(c.A.Vreal)}`,eq(c.A.V,c.A.Vreal),'iguais');
-    T('15. v4.8','Instrumentos usam o declarado (valTer = V × AT)',
-      Math.round(c.A.valTer),eq(c.A.valTer,c.A.V*c.A.AT),'V declarado × AT');
+    T('15. v4.8','Instrumentos usam V para fins de instrumentos (valTer = V × AT)',
+      Math.round(c.A.valTer),eq(c.A.valTer,c.A.V*c.A.AT),'V instrumentos × AT');
     const dr=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OP-3',tipo:'0',
       V:'6500',Vreal:'4000',permuta:'40',permTipo:'fisica'}).A;
-    T('15. v4.8','ODC não muda com o valor real (fica no declarado)',
+    T('15. v4.8','ODC não muda com o valor real (fica em V para instrumentos)',
       Math.round(dr.odc),eq(dr.odc,c.A.odc),Math.round(c.A.odc));
     T('15. v4.8','Custo do terreno usa o valor real',
       Math.round(dr.cTer),eq(dr.cTer,dr.valTerReal*(1-0.4)),'Vreal × (1 − permuta)');
     T('15. v4.8','Permuta física é calculada sobre o valor real',
       Math.round(dr.vgvPermuta),eq(dr.vgvPermuta,0.4*dr.valTerReal*dr.p.fatorPermuta),'real × fator');
-    T('15. v4.8','Valor real menor que o declarado melhora o resultado',
+    T('15. v4.8','Valor real menor que V para instrumentos melhora o resultado',
       `${Math.round(c.A.lucro)} → mais alto`,
       _cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OP-3',tipo:'0',V:'6500',Vreal:'4000'}).A.lucro>c.A.lucro,
       'lucro sobe com terreno mais barato');
@@ -7232,6 +7424,19 @@ function rodarTestes(){
       `${Math.round(abs.vendResid)} → ${Math.round(prod.vendResid)} m² · unidade ${prod.areaUnidEfetiva.toFixed(1)} m²`,
       prod.vendResid<abs.vendResid && Math.abs(prod.areaUnidEfetiva-50)<1,
       'área menor, unidade de 50 m²');
+    const qcAbs=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1B',zona:'OM-2',
+      tipo:'0',testada:'30',profund:'40',areaUnid:'40',QT:'60',QTmodo:'absorver',
+      faModo:'TO',vagasModo:'zero'}).A;
+    const qcProd=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1B',zona:'OM-2',
+      tipo:'0',testada:'30',profund:'40',areaUnid:'40',QT:'60',QTmodo:'produto',
+      faModo:'TO',vagasModo:'zero'}).A;
+    T('22. Quota','Quota de produto rígido preserva a área comercial',
+      `${Math.round(qcAbs.vendCom)} · ${Math.round(qcProd.vendCom)} m²`,
+      eq(qcAbs.vendCom,qcProd.vendCom),'comercial idêntico');
+    T('22. Quota','Quota de produto rígido reduz o CA praticado, não o programa comercial',
+      `${qcAbs.caPrat.toFixed(2)} → ${qcProd.caPrat.toFixed(2)}`,
+      qcProd.caPrat<qcAbs.caPrat-0.01 && qcProd.nUnidades===Math.floor(qcProd.Alote/qcProd.QT),
+      'CA menor e unidades limitadas pela quota');
     T('22. Quota','Modo "produto" registra o potencial construtivo ocioso',
       `${Math.round(prod.potencialOcioso)} m²`,prod.potencialOcioso>0,'> 0');
     T('22. Quota','Área ociosa reconcilia com o potencial do coeficiente',
@@ -7300,6 +7505,7 @@ function rodarTestes(){
       ov||{})).A;
     const gLei=gv('lei'), gLei0=gv('lei',{vagasModo:'zero'});
     const gOus=gv('ous'), gOus0=gv('ous',{vagasModo:'zero'});
+    const gOusMan=gv('ous',{vagasModo:'manual',vagasN:'20'});
     T('24. Garagem','Lei: vagas mínimas pela regra geral (1 a cada 3 unidades)',
       `${gLei.nVagas} vagas para ${gLei.unPotencial} unidades`,
       gLei.nVagas>0 && gLei.vagasLeiMin===gLei.nVagas,'mínimo da Tabela 2.1');
@@ -7321,19 +7527,24 @@ function rodarTestes(){
     T('24. Garagem','Lei: a garagem é construída além do envelope e custa obra',
       `${Math.round(gLei0.constr)} → ${Math.round(gLei.constr)} m²`,
       gLei.constr>gLei0.constr,'área construída maior');
-    // OUS — a garagem entra na ATE
-    T('24. Garagem','OUS: a garagem consome ATE e reduz a área vendável',
-      `${Math.round(gOus0.vendResid)} → ${Math.round(gOus.vendResid)} m²`,
-      gOus.areaGaragem>0 ? gOus.vendResid<gOus0.vendResid : true,'vendável menor');
+    // OUS — mínimo dispensado; garagem só aparece se o estudo optar por ela
+    T('24. Garagem','OUS: modo automático resulta em zero vaga obrigatória',
+      `${gOus.nVagas} vagas`,gOus.nVagas===0,'zero — item 6.1');
+    T('24. Garagem','OUS: automático e "sem garagem" produzem o mesmo programa',
+      `${Math.round(gOus.vendResid)} · ${Math.round(gOus0.vendResid)} m²`,
+      eq(gOus.vendResid,gOus0.vendResid)&&eq(gOus.areaGaragem,0),'idênticos');
+    T('24. Garagem','OUS: vaga manual consome ATE e reduz a área vendável',
+      `${Math.round(gOus0.vendResid)} → ${Math.round(gOusMan.vendResid)} m²`,
+      gOusMan.areaGaragem>0 && gOusMan.vendResid<gOus0.vendResid,'vendável menor');
     T('24. Garagem','OUS: área construída não cresce — a garagem já está na ATE',
-      `${Math.round(gOus0.constr)} · ${Math.round(gOus.constr)}`,
-      eq(gOus.constr,gOus0.constr),'idêntica');
+      `${Math.round(gOus0.constr)} · ${Math.round(gOusMan.constr)}`,
+      eq(gOusMan.constr,gOus0.constr),'idêntica');
     T('24. Garagem','OUS: vendável = (bruta − garagem) ÷ (bruta/privativa)',
-      Math.round(gOus.vendResid+gOus.vendCom),
-      eq(gOus.vendResid+gOus.vendCom,(gOus.gross-gOus.areaGaragem)/gOus.p.brutaPriv),
+      Math.round(gOusMan.vendResid+gOusMan.vendCom),
+      eq(gOusMan.vendResid+gOusMan.vendCom,(gOusMan.gross-gOusMan.areaGaragem)/gOusMan.p.brutaPriv),
       'relação bruta/líquida mantida sobre a área remanescente');
     T('24. Garagem','OUS: nenhuma parcela da garagem é não computada',
-      Math.round(gOus.garNaoComp),eq(gOus.garNaoComp,0),0);
+      Math.round(gOusMan.garNaoComp),eq(gOusMan.garNaoComp,0),0);
     // teto de vagas da OUS (Anexo II, item 6.2)
     const t1A=gv('ous',{cenario:'OUS – Subárea 1A',vagasModo:'manual',vagasN:'999'});
     const t12=gv('ous',{cenario:'OUS – Área 2',vagasModo:'manual',vagasN:'999'});
@@ -7343,6 +7554,11 @@ function rodarTestes(){
     T('24. Garagem','OUS: teto de 1 vaga por unidade na Área 2',
       `1A ${t1A.vagasOusMax} · Área 2 ${t12.vagasOusMax}`,
       t12.vagasOusMax>=t1A.vagasOusMax,'Área 2 admite mais vagas');
+    T('24. Garagem','OUS: teto manual é auto-consistente após a própria garagem reduzir unidades',
+      `${t12.nVagas} vagas · ${t12.vagasOusMaxUn} un · ${t12.vagasOusMaxCom} vagas não residenciais`,
+      t12.nVagas===t12.vagasOusMax &&
+      t12.nVagas===t12.vagasOusMaxRes+t12.vagasOusMaxCom,
+      'vagas = teto recalculado sobre o programa final');
     T('24. Garagem','Sem garagem os dois marcos voltam ao comportamento anterior',
       `${Math.round(gOus0.areaGaragem)} · ${Math.round(gLei0.areaGaragem)}`,
       eq(gOus0.areaGaragem,0)&&eq(gLei0.areaGaragem,0),'zero');
