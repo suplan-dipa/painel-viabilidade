@@ -771,6 +771,11 @@
   #rowCega.cegaBloqueada .cegaOpt{cursor:not-allowed}
   #rowCega.cegaBloqueada input{cursor:not-allowed}
 
+  /* ---- empreendimento do poder público ---- */
+  .row.checkRow input[type=checkbox]{flex:0 0 auto;width:auto;margin:0 4px 0 0;accent-color:var(--pbh-azul)}
+  .row.checkRow label{cursor:pointer}
+  .instrumentoSuspenso{opacity:.50}
+
   /* ====== CORTE E PLANTA EM SVG ====== */
   #vizDesenho{margin-top:12px;padding:11px 13px}
   #vizDesenho h3{margin:0 0 9px;font-size:12px;font-weight:700;color:var(--ink);
@@ -1061,8 +1066,10 @@
         </select></div>
       <div class="hint" id="hintPadrao">Preenche CUB, BDI e faixa de preço com valores típicos do padrão. <b>Todos os campos continuam editáveis</b> — ao alterar qualquer um, o padrão passa a "Personalizado".</div>
       <div class="row"><label>V – valor do terreno para fins de instrumentos (R$/m²)</label><input id="V" type="number" step="100" value="6500"></div>
-      <div class="hint" id="hintVdecl">Base dos instrumentos urbanísticos — ODC, UR, AMIS e ITBI incidem sobre este valor.</div>
-      <div class="row"><label>Valor real de aquisição (R$/m², vazio = igual ao declarado)</label><input id="Vreal" type="number" step="100" placeholder="igual ao declarado"></div>
+      <div class="hint" id="hintVdecl">Informe o <b>valor unitário do terreno da referência utilizada para o ITBI</b> (Planta/base de valores adotada pelo Município para os instrumentos). É a base de ODC/TDC e das conversões ligadas à UR e ao AMIS; não confundir com o preço efetivamente pago pelo terreno.</div>
+      <div class="row checkRow" id="rowPoderPublico"><label for="poderPublico">Empreendimento do poder público</label><input id="poderPublico" type="checkbox" aria-describedby="hintPoderPublico"></div>
+      <div class="hint" id="hintPoderPublico">Quando marcado, a ODC fica suspensa e o estudo zera TDC. Como premissa operacional provisória desta versão, também não há despesa de aquisição de UR nem AMIS. O valor V continua sendo usado na geração/conversão de UR e nos demais cálculos que dependem da referência do ITBI.</div>
+      <div class="row"><label>Valor real de aquisição (R$/m², vazio = igual ao valor para fins de instrumentos)</label><input id="Vreal" type="number" step="100" placeholder="igual ao valor para instrumentos"></div>
       <div class="hint" id="hintVreal">Custo efetivamente pago pelo terreno. Entra no fluxo de caixa e na permuta; não altera os instrumentos.</div>
       <div class="row"><label>% permuta do terreno</label><input id="permuta" type="number" step="1" value="0"></div>
       <div class="row"><label>Tipo de permuta</label>
@@ -2084,12 +2091,13 @@ function lerParametros(){
   p.pHisA1=num('pHisA1'); p.pHisA2=num('pHisA2'); p.pHisB1=num('pHisB1');
   p.pHisB2=num('pHisB2'); p.pHisLivre=num('pHisLivre');
   p.isenHis1=num('isenHis1')/100; p.isenHis2=num('isenHis2')/100;
-  // mercado
+  // mercado e natureza do proponente
   p.V=num('V'); p.pApto=num('pApto'); p.pCom=num('pCom');
-  // Valor PARA FINS DE INSTRUMENTOS (p.V) é a base dos instrumentos urbanísticos. Valor REAL de
-  // aquisição (p.Vreal) é o custo econômico efetivo — entra no fluxo e na permuta.
-  // Vazio significa "igual ao valor para fins de instrumentos"; o rótulo mantém a forma curta "igual ao declarado"
-  // reproduz exatamente o comportamento anterior.
+  p.poderPublico=!!($('poderPublico')&&$('poderPublico').checked);
+  // V é o valor unitário do terreno segundo a referência utilizada para o ITBI,
+  // adotado pelos instrumentos urbanísticos. O valor REAL de aquisição (p.Vreal)
+  // é o custo econômico efetivo — entra no fluxo e na permuta.
+  // Vazio significa "igual ao valor para fins de instrumentos".
   { const raw=$('Vreal')?$('Vreal').value.trim():''; p.Vreal=raw===''?p.V:Math.max(0,num('Vreal')); }
   p.cubR=num('cubR'); p.cubC=num('cubC'); p.BDI=num('BDI')/100;
   p.permuta=num('permuta')/100; p.permFisica=$('permTipo').value==='fisica';
@@ -2453,7 +2461,9 @@ function modelo(p){
   // empreendimento de interesse social (AEIS-1 ou tipo 1 na OUS) não está sujeito
   // à exigência de TDC sobre a diferença entre o básico e o máximo. Nos demais
   // casos a base da TDC permanece a área onerável, como antes.
-  const dispensaTDC = regimeHIS && HIS.his1Ok;
+  // Empreendimento do poder público: por premissa do estudo, não suporta TDC.
+  // A dispensa por HIS permanece como regra independente para os demais casos.
+  const dispensaTDC = p.poderPublico || (regimeHIS && HIS.his1Ok);
   const tdcArea = dispensaTDC ? 0 : p.pTDC*onerav;
   // (B1.6) removido o teto arbitrário de 90% da área onerável. A ODC incide sobre
   // o que resta da faixa onerável após a TDC e as isenções — se as isenções de
@@ -2463,7 +2473,10 @@ function modelo(p){
   const odcCheia=p.VL*odcArea*p.V;
   const isencao=(p.adere&&!p.fora&&ANEXOV[p.areaNum])?ANEXOV[p.areaNum][p.prazoI]:0;
   // descontos temporais da OUS e desconto de pagamento à vista incidem sobre o valor final
-  const odc=odcCheia*(1-isencao)*(p.odcAvista?0.7:1);
+  const odcCalculada=odcCheia*(1-isencao)*(p.odcAvista?0.7:1);
+  // Lei 11.216/2020: a prestação de contrapartida onerosa por ODC fica suspensa
+  // para empreendimento do poder público. No estudo, a obrigação financeira é zero.
+  const odc=p.poderPublico?0:odcCalculada;
   const tdc=(tdcArea*p.V/1000)*p.precoUTDC;
 
   // ---- Unidades de Regeneração ----
@@ -2475,7 +2488,10 @@ function modelo(p){
   // seu fator de redução é zero).
   const caSuper=Math.max(0,Math.min(caPrat,p.caTeto)-p.caApl);
   const AER=caSuper*AT;
-  const pagaDespUR=p.adere&&(p.areaNum===2||p.naoIncentivado);
+  // Premissa operacional provisória: empreendimento do poder público pode exercer
+  // a superação aplicável sem despesa de aquisição de UR. Isso NÃO afeta a geração
+  // de UR quando o empreendimento for gerador na Área 1.
+  const pagaDespUR=!p.poderPublico&&p.adere&&(p.areaNum===2||p.naoIncentivado);
   const urDesp=pagaDespUR?(AER*p.V/1000)*p.vUR*(1+p.pFundo):0;
   // BASE DE GERAÇÃO LIMITADA AO COEFICIENTE MÁXIMO. Na Área 1 o empreendimento
   // gera UR sobre o potencial até o CA da zona. Os metros quadrados construídos
@@ -2507,7 +2523,8 @@ function modelo(p){
   //   Fora, OP-3 ou Centr. Regional ..... devida se não atingir 10%
   //   Fora, demais zonas ................ devida se não atingir 5%
   let usarAMIS=false;
-  if(p.adere){
+  // Premissa operacional provisória: empreendimento do poder público não paga AMIS.
+  if(p.adere&&!p.poderPublico){
     if(p.fora)        usarAMIS = p.supUR < (p.emOp3cr?0.10:0.05);
     else if(p.area2)  usarAMIS = p.supUR < 0.21;
     // Subáreas 1A/1B: o incentivado é isento; o não incentivado só se dispensa
@@ -2621,7 +2638,7 @@ function modelo(p){
     esbMax:p.esbMax,fundMax:p.fundMax,cargaPav:p.cargaPav,
     vagasOusMax:(vagasOusMax===Infinity?null:vagasOusMax),vagasOusMaxRes,vagasOusMaxCom,vagasOusMaxUn,
     vagasModo:p.vagasModo,mVaga:p.mVaga,
-    cegaEsq:p.cegaEsq,cegaDir:p.cegaDir,trechos:(G&&G.trechos)||null,nArvores,valTerReal,Vreal:p.Vreal,potencialCA,onerav,dispensaTDC,tdcArea,isentaAFP,isentaHIS,isentaFA,isenta,isentaExcedente,odcArea,odcCheia,isencao,odc,tdc,
+    cegaEsq:p.cegaEsq,cegaDir:p.cegaDir,trechos:(G&&G.trechos)||null,nArvores,valTerReal,Vreal:p.Vreal,poderPublico:p.poderPublico,potencialCA,onerav,dispensaTDC,tdcArea,isentaAFP,isentaHIS,isentaFA,isenta,isentaExcedente,odcArea,odcCheia,odcCalculada,isencao,odc,tdc,
     FRv,AGT,areaGeradora,urRec,caSuper,AER,urDesp,pagaDespUR,autoAplica,urAutoQtd,urAutoValor,
     supURInoperante,supURParcial,supExerc,usarAMIS,amis,
     isentoITBI,itbi,AT,valTer,
@@ -2636,6 +2653,20 @@ function modelo(p){
 // ---------------------------------------------------------------------------
 function aplicarNaUI(p,R){
   $('caApl').value=p.caApl.toFixed(2);
+  // Empreendimento do poder público: mantém as premissas gravadas, mas desabilita
+  // os controles de obrigações que não produzem desembolso enquanto a opção estiver ativa.
+  { const pp=!!p.poderPublico;
+    ['VL','odcPag','odcParc','pTDC','precoUTDC','pFundo','pAMIS','amisMom','amisParc'].forEach(id=>{
+      const el=$(id); if(!el) return; el.disabled=pp;
+      const row=el.closest('.row'); if(row){row.classList.toggle('instrumentoSuspenso',pp);row.setAttribute('aria-disabled',pp?'true':'false');}
+    });
+    const hp=$('hintPoderPublico'); if(hp){
+      hp.className='hint'+(pp?' hintAlerta':'');
+      hp.innerHTML=pp
+        ? '<b>Poder público ativo:</b> ODC suspensa; TDC zerada; e, como premissa operacional provisória, sem despesa de aquisição de UR e sem AMIS. O V do ITBI continua ativo para geração/conversão de UR.'
+        : 'Quando marcado, a ODC fica suspensa e o estudo zera TDC. Como premissa operacional provisória desta versão, também não há despesa de aquisição de UR nem AMIS. O valor V continua sendo usado na geração/conversão de UR e nos demais cálculos que dependem da referência do ITBI.';
+    }
+  }
   if($('urBai')) $('urBai').value=(p.urBai*100).toFixed(0)+'%';
   // preço do apartamento sob regime HIS
   if(R.regimeHIS && R.HIS.soma>0){ $('pApto').value=R.pAptoEfetivo; $('pApto').readOnly=true; }
@@ -2839,9 +2870,11 @@ function aplicarNaUI(p,R){
     if(!p.adere||teto===0){ hSup.innerHTML=''; hSup.className='hint'; }
     else if(p.supUR<=0){
       hSup.className='hint';
-      const via=(p.areaNum===1&&!p.naoIncentivado)
-        ? 'por <b>autoaplicação</b> da UR que o próprio empreendimento gera — sem despesa nem receita'
-        : 'mediante <b>aquisição</b> de UR';
+      const via=p.poderPublico
+        ? 'sem despesa de aquisição de UR (<b>premissa operacional provisória para empreendimento do poder público</b>)'
+        : ((p.areaNum===1&&!p.naoIncentivado)
+          ? 'por <b>autoaplicação</b> da UR que o próprio empreendimento gera — sem despesa nem receita'
+          : 'mediante <b>aquisição</b> de UR');
       hSup.innerHTML=`Teto de <b>${teto}%</b> acima do coeficiente máximo (${n2(p.caApl)}) neste cenário, ${via}.`;
     }else if(R.supURInoperante){
       hSup.className='hint hintAlerta';
@@ -2854,11 +2887,16 @@ function aplicarNaUI(p,R){
       hSup.className='hint hintAlerta';
       hSup.innerHTML=`⚠ <b>Superação parcialmente exercida.</b> Dos ${pc(p.supUR)} declarados, o envelope alcança `
         +`apenas <b>${pc(R.supExerc)}</b> acima do coeficiente máximo — ${limB} limita o restante. `
-        +`A UR é adquirida somente sobre os ${m2(R.AER)} efetivamente exercidos.`;
+        +(p.poderPublico
+          ?`Os ${m2(R.AER)} efetivamente exercidos <b>não geram despesa de aquisição de UR</b> nesta premissa para poder público.`
+          :`A UR é adquirida somente sobre os ${m2(R.AER)} efetivamente exercidos.`);
     }else{
       hSup.className='hint';
       hSup.innerHTML=`✓ Superação integralmente exercida: <b>${m2(R.AER)}</b> acima do coeficiente máximo, `
         +`equivalentes a ${pc(R.supExerc)} do CA máximo.`
+        +(p.poderPublico&&!R.autoAplica
+          ? ` <b>Sem despesa de aquisição de UR</b> nesta premissa operacional para empreendimento do poder público.`
+          : '')
         +(R.autoAplica
           ? ` Em Subárea ${p.cenario.indexOf('1B')>=0?'1B':'1A'} o empreendimento incentivado <b>autoaplica</b> `
             +`a UR que ele próprio gera. Esses ${m2(R.AER)} <b>se autofinanciam</b>: não geram UR nem `
@@ -2907,7 +2945,7 @@ function compute(){
     faPct:p.faPct,brutaLiq:p.brutaLiq,fBruta:p.fBruta,
     potencialODC:R.potencialCA,VL:p.VL,emOp3cr:p.emOp3cr,vlOp3:(p.zona==='OP-3'),
     odcAvista:p.odcAvista,naoIncentivado:p.naoIncentivado,
-    V:p.V,vUR:p.vUR,permuta:p.permuta,permFisica:p.permFisica,
+    V:p.V,vUR:p.vUR,poderPublico:p.poderPublico,permuta:p.permuta,permFisica:p.permFisica,
     AFPpct:p.AFPpct,fatorAFP:(!p.lei&&p.adere)?p.fatorAFPin:1.0,
     isenHis1:p.isenHis1,isenHis2:p.isenHis2,pTDC:p.pTDC,pAMIS:p.pAMIS,
     pAptoUsado:R.pAptoEfetivo,pComUsado:p.pCom
@@ -3374,16 +3412,16 @@ function render(p,G,r){
     ['','Terreno (caixa)',fmtR(r.cTer)],
     ['','ITBI',fmtR(r.itbi)],
     ['','Projetos + Administração',fmtR(r.cProj+r.cAdm)],
-    ['','ODC',fmtR(r.odc)],
+    ['',r.poderPublico?'ODC (suspensa — poder público)':'ODC',fmtR(r.odc)],
     ...(r.regimeHIS?[['','&nbsp;&nbsp;↳ área isenta por HIS (m²)',
         Math.round(r.isentaHIS).toLocaleString('pt-BR')+' m²']]:[]),
     ...(r.isentaAFP>0?[['','&nbsp;&nbsp;↳ área isenta por AFP (m²)',
         Math.round(r.isentaAFP).toLocaleString('pt-BR')+' m²']]:[]),
     ...(r.isentaFA>0?[['','&nbsp;&nbsp;↳ área isenta por fachada ativa (m²)',
         Math.round(r.isentaFA).toLocaleString('pt-BR')+' m²']]:[]),
-    ['','TDC',fmtR(r.tdc)],
-    ['','UR – despesa (aquisição)',fmtR(r.urDesp)],
-    ['','AMIS',fmtR(r.amis)],
+    ['',r.poderPublico?'TDC (dispensada — poder público)':'TDC',fmtR(r.tdc)],
+    ['',r.poderPublico?'UR – aquisição (dispensada — poder público)':'UR – despesa (aquisição)',fmtR(r.urDesp)],
+    ['',r.poderPublico?'AMIS (dispensado — poder público)':'AMIS',fmtR(r.amis)],
     ...(r.permutaFin>0.5?[['','Permuta financeira (repasse ao proprietário)',fmtR(r.permutaFin)]]:[]),
     ['','Comercialização + marketing + lançamento',fmtR(r.cComm+r.cMkt+r.cLanc)],
     ['','Impostos sobre receita (RET)',fmtR(r.cImp)],
@@ -3436,6 +3474,7 @@ function render(p,G,r){
   if(r.isGenUR) ousBadges+=' <span class="badge ur-gen">⬆ Gerador de UR</span>';
   if(r.isRecUR) ousBadges+=' <span class="badge ur-rec">⬇ Receptor de UR</span>';
   if(r.pagaAMIS) ousBadges+=' <span class="badge amis">◆ Paga AMIS</span>';
+  if(r.poderPublico) ousBadges+=' <span class="badge">🏛 Poder público · ODC/TDC/UR/AMIS sem desembolso</span>';
   const modoOUSbadge=document.querySelector('.modeSel .mode[data-mode="ous"]').classList.contains('active');
   if(r.adereOUS&&r.arbStep>0&&modoOUSbadge) ousBadges+=` <span class="badge arb">🌳 ${r.nArvores} árvore${r.nArvores>1?'s':''} · 1 a cada ${r.arbStep} m de testada</span>`;
   $('leg').innerHTML=`Lote ${p.testada}×${p.profund} m · TO ${(p.TO*100).toFixed(0)}% · af. frontal ${p.afFrontal} m`+`<br>${bindReason}${ousBadges}`;
@@ -4058,6 +4097,7 @@ function initBuscaParam(){
     faModo:'fachada ativa isencao termo',
     V:'valor terreno instrumentos base calculo valor para fins de instrumentos',
     Vreal:'valor terreno real aquisicao custo efetivo permuta',
+    poderPublico:'empreendimento poder publico prefeitura municipal odc tdc ur amis isencao suspensao',
     his1Tot:'habitacao interesse social his1 faixa',
     his2Tot:'habitacao interesse social his2 faixa',
     hisLivre:'livre comercializacao mercado his',
@@ -5340,7 +5380,8 @@ function buildAuditoria(){
     <tr><td>Pé-direito</td><td class="n">${n2(P.peDir)} m</td></tr>
     <tr><td>Coeficiente básico (CA<sub>bás</sub>)</td><td class="n">${n2(A.CAbas)}</td></tr>
     <tr><td>Coeficiente aplicável (CA<sub>apl</sub>)</td><td class="n">${n2(A.caApl)}</td></tr>
-    <tr><td>Valor do terreno para fins de instrumentos</td><td class="n">${rs(A.V)}/m²</td></tr>
+    <tr><td>V — valor unitário de referência do ITBI para fins de instrumentos</td><td class="n">${rs(A.V)}/m²</td></tr>
+    <tr><td>Empreendimento do poder público</td><td class="n">${A.poderPublico?'Sim':'Não'}</td></tr>
     ${Math.abs(A.Vreal-A.V)>0.5?`<tr><td>Valor real de aquisição (fluxo e permuta)</td><td class="n">${rs(A.Vreal)}/m²</td></tr>`:''}
   </tbody></table>`;
 
@@ -5498,20 +5539,26 @@ function buildAuditoria(){
     `max(0 ; ${m2e(A.onerav)} − ${m2e(A.tdcArea)} − ${m2e(A.isenta)})`,
     m2e(A.odcArea),
     (A.dispensaTDC
-      ? `<b>TDC dispensada</b>: o empreendimento cumpre o regime de HIS com HIS-1 de ${pc(A.HIS.his1)} (≥ 49%), não sujeito à exigência de transferência sobre a faixa entre o básico e o máximo.`
+      ? (A.poderPublico
+          ? `<b>TDC sem desembolso</b>: o estudo está marcado como empreendimento do poder público.`
+          : `<b>TDC dispensada</b>: o empreendimento cumpre o regime de HIS com HIS-1 de ${pc(A.HIS.his1)} (≥ 49%), não sujeito à exigência de transferência sobre a faixa entre o básico e o máximo.`)
       : `Área de TDC = ${pc(A.pTDC)} da área onerável = ${m2(A.tdcArea)}.`)
       + (A.isentaExcedente>0.5?` <b>As isenções excedem a área onerável em ${m2(A.isentaExcedente)}</b> — o excedente não gera crédito e a ODC é zero.`:'')
       + ((A.dispensaTDC && A.odcArea<0.5)?' Com a TDC dispensada e as isenções de HIS cobrindo a faixa onerável, <b>não resta obrigação onerosa</b>.':''));
   h+=et('Outorga Onerosa do Direito de Construir',
-    'O valor cheio aplica o fator de localização sobre a área tributável e o valor do terreno. Sobre ele incidem a isenção do Anexo V e, quando aplicável, o desconto de pagamento à vista.',
+    A.poderPublico
+      ? 'A ODC é calculada apenas como referência de auditoria, mas a prestação da contrapartida onerosa fica suspensa para empreendimento do poder público; portanto, o desembolso considerado no estudo é zero.'
+      : 'O valor cheio aplica o fator de localização sobre a área tributável e o valor do terreno. Sobre ele incidem a isenção do Anexo V e, quando aplicável, o desconto de pagamento à vista.',
     'ODC<sub>cheia</sub> = VL × Tributável × V &nbsp;·&nbsp; ODC = ODC<sub>cheia</sub> × (1 − isenção<sub>AnexoV</sub>)'
       + (A.odcAvista?' × 0,70':''),
     `${n2(A.VL)} × ${m2x(A.odcArea)} × ${rs(A.V)} = ${rs(A.odcCheia)} ; `
       + `${rs(A.odcCheia)} × (1 − ${pc(A.isencao)})${A.odcAvista?' × 0,70':''}`,
     rs(A.odc),
-    `VL = ${n2(A.VL)} (sugerido: 0,25 em OP-3 e 0,50 nas demais zonas; vale nos dois marcos, campo editável)`
-      + (A.isencao>0?` · isenção do Anexo V de ${pc(A.isencao)}, conforme área e prazo de protocolo`:'')
-      + (A.odcAvista?' · desconto de 30% por pagamento à vista.':'.'), true);
+    A.poderPublico
+      ? `Valor calculado antes da suspensão: ${rs(A.odcCalculada)}. V = referência de ITBI de ${rs(A.V)}/m².`
+      : (`VL = ${n2(A.VL)} (sugerido: 0,25 em OP-3 e 0,50 nas demais zonas; vale nos dois marcos, campo editável)`
+        + (A.isencao>0?` · isenção do Anexo V de ${pc(A.isencao)}, conforme área e prazo de protocolo`:'')
+        + (A.odcAvista?' · desconto de 30% por pagamento à vista.':'.')), true);
   // quadro consolidado: permite conferir a contrapartida sem percorrer as etapas
   h+=`<div class="quadro"><div class="qTit">Quadro consolidado das contrapartidas</div>
     <table class="mem q2"><thead><tr><th>Componente</th><th>Área (m²)</th><th>Valor (R$)</th></tr></thead><tbody>
@@ -5523,7 +5570,7 @@ function buildAuditoria(){
     <tr class="qSub"><td>Área tributável de outorga</td><td class="n">${m2e(A.odcArea)}</td><td class="n">${rs(A.odc)}</td></tr>
     ${A.urDesp>0?`<tr><td>Unidades de Regeneração adquiridas (acima do CA máximo)</td><td class="n">${m2e(A.AER)}</td><td class="n">${rs(A.urDesp)}</td></tr>`:''}
     ${A.amis>0?`<tr><td>AMIS</td><td class="n">—</td><td class="n">${rs(A.amis)}</td></tr>`:''}
-    <tr class="qSub"><td>Total pago ao poder público</td><td class="n">—</td><td class="n">${rs(A.regDesp)}</td></tr>
+    <tr class="qSub"><td>Total pago ao poder público${A.poderPublico?' (obrigações suspensas/dispensadas no estudo)':''}</td><td class="n">—</td><td class="n">${rs(A.regDesp)}</td></tr>
     ${A.urRec>0?`<tr><td>(−) Unidades de Regeneração geradas (receita)</td><td class="n">${m2e(A.AGT)}</td><td class="n">${rs(A.urRec)}</td></tr>`:''}
     <tr class="qTot"><td>Contrapartida líquida do empreendimento</td><td class="n">—</td><td class="n">${rs(A.regDesp-A.urRec)}</td></tr>
     <tr><td>Contrapartida líquida sobre o VGV disponível</td><td class="n">—</td><td class="n">${A.vgvDisp?pc((A.regDesp-A.urRec)/A.vgvDisp):'—'}</td></tr>
@@ -5532,6 +5579,10 @@ function buildAuditoria(){
     </div>`;
   if(A.tdc>0) h+=et('Transferência do Direito de Construir', 'Contrapartida pela aquisição de potencial transferido.',
     'TDC = Área<sub>TDC</sub> × (V ÷ 1000) × preço da unidade', `${m2(A.tdcArea)} × (${rs(A.V)} ÷ 1000) × ${rs(A.p.precoUTDC)}`, rs(A.tdc));
+  else if(A.dispensaTDC && A.poderPublico) h+=et('Transferência do Direito de Construir — sem desembolso',
+    'O estudo está marcado como empreendimento do poder público; por premissa operacional, não há desembolso de TDC.',
+    'TDC = 0', 'empreendimento do poder público', rs(0),
+    'A aplicabilidade jurídica da dispensa de TDC deve ser confirmada no enquadramento do caso concreto.');
   else if(A.dispensaTDC && A.regimeHIS) h+=et('Transferência do Direito de Construir — dispensada',
     'No regime de habitação de interesse social (AEIS-1 ou tipo 1 na OUS), atendido o mínimo de HIS-1, não há exigência de TDC sobre a diferença entre o coeficiente básico e o máximo.',
     'TDC = 0 (dispensada por HIS-1 ≥ 49%)', `HIS-1 = ${pc(A.HIS.his1)}`, rs(0));
@@ -5545,6 +5596,10 @@ function buildAuditoria(){
     'UR<sub>receita</sub> = Área geradora × FR × (V ÷ 1000) × valor da UR',
     `${m2(A.areaGeradora)} × ${n2(A.FRv)} × (${n0(A.V)} ÷ 1000) × ${n0(A.vUR)}`,
     rs(A.urRec), 'FR é o fator de redução do Anexo III, definido pelo tipo de empreendimento e pelo prazo.');
+  if(A.poderPublico && A.AER>0.5 && !A.autoAplica) h+=et('Aquisição de UR — sem desembolso no estudo',
+    'Há área adicional exercida acima do coeficiente máximo, mas, como premissa operacional provisória para empreendimento do poder público, não se atribui despesa de aquisição de UR.',
+    'UR<sub>despesa</sub> = 0', `${m2(A.AER)} de área adicional efetivamente exercida`, rs(0),
+    'A regra deverá ser revista quando houver definição jurídica/regulamentar específica para o caso.');
   if(A.urDesp>0) h+=et('Despesa de aquisição de UR',
     'A UR é adquirida exclusivamente por lotes <b>receptores</b> — Área 2 e fora do perímetro — para exercer potencial acima do <b>coeficiente máximo</b> da zona.',
     'ΔCA = min(CA<sub>prat</sub> ; CA<sub>máx</sub> × (1 + %superação)) − CA<sub>máx</sub><br>UR<sub>despesa</sub> = ΔCA × AT × (V ÷ 1000) × valor da UR × (1 + fundo)',
@@ -5562,6 +5617,10 @@ function buildAuditoria(){
     'ΔCA = min(CA<sub>prat</sub> ; CA<sub>teto</sub>) − CA<sub>máx</sub>',
     `min(${n4(A.caPrat)} ; ${n4(A.caTeto)}) − ${n4(A.caApl)}`, '0,00 m²',
     'A geometria (afastamentos, taxa de ocupação ou limite altimétrico) trava a área construída antes do coeficiente máximo. Verificar se a dispensa de AMIS pretendida se sustenta sem aquisição efetiva de UR.');
+  if(A.poderPublico && A.p.adere) h+=et('AMIS — sem desembolso no estudo',
+    'Como premissa operacional provisória desta versão, empreendimento do poder público não paga AMIS.',
+    'AMIS = 0', 'empreendimento do poder público', rs(0),
+    'A regra deve ser confirmada quando houver definição normativa/regulamentar aplicável.');
   if(A.amis>0) h+=et('AMIS',
     'Devida apenas no marco da OUS. As Subáreas 1A e 1B são isentas. Na Área 2 é devida quando a superação via UR não atinge 21%; fora do perímetro, quando não atinge 10% em OP-3 ou Centralidade Regional e 5% nas demais zonas.',
     'AMIS = %AMIS × V × AT', `${pc(A.pAMIS)} × ${rs(A.V)} × ${m2(A.Alote)}`, rs(A.amis),
@@ -6033,7 +6092,7 @@ $('pdfBtn').addEventListener('click',()=>{ buildReport(); setTimeout(()=>window.
 // perceba. O bloco abaixo carimba tudo o que determina o resultado.
 
 const MODELO={
-  versao:'5.14.0',
+  versao:'5.15.0',
   marcos:{
     lei:'Lei Municipal nº 11.181/2019 (Plano Diretor de Belo Horizonte)',
     ous:'PL nº 574/2025 — Operação Urbana Simplificada Somos Centro (substitutivo)',
@@ -6041,6 +6100,7 @@ const MODELO={
     nbr:'NBR 12721 (área equivalente de construção) · NBR 14653 (não aplicada)'
   },
   historico:[
+    ['5.15.0','V passa a ser explicitamente a referência unitária do terreno utilizada para o ITBI nos instrumentos. Novo checkbox Empreendimento do poder público: a ODC é zerada por suspensão da contrapartida; a TDC não gera desembolso; e, como premissa operacional provisória, não há despesa de aquisição de UR nem AMIS. A geração de UR permanece ativa e continua usando V. Os controles sem efeito ficam desabilitados sem perder seus valores, o CSV persiste o novo campo e o memorial discrimina a regra aplicada.'],
     ['5.14.0','Persistência CSV reforçada para round-trip fiel. A exportação passa a sincronizar/recalcular antes de capturar os campos; controles de interface que não são premissas (como a busca de parâmetros) deixam de ser serializados. Na importação, os valores carregados que possuem presets automáticos são tratados como premissas explícitas do estudo, impedindo que zona, cenário ou tipo os sobrescrevam no primeiro recálculo. Arquivos da mesma versão/esquema são verificados após a carga e uma divergência em campo editável interrompe a importação e restaura o estado anterior. O CSV passa a declarar versão de esquema e quantidade de campos persistidos.'],
     ['5.13.0','Correção conjunta de vagas e quota. Na OUS, o modo automático passa a adotar zero vaga, pois o mínimo é dispensado; o item 6.2 é tratado exclusivamente como teto da quantidade informada. O teto passa a ser resolvido de forma auto-consistente, recalculando unidades após a área consumida pela própria garagem; na Lei, o mínimo também é resolvido contra o programa final e passa a respeitar a dispensa de uso não residencial até 500 m². Na quota, o modo de tamanho fixo preserva integralmente a parcela comercial e limita somente o potencial residencial, reduzindo o CA praticado quando a quota impede transformar o potencial em apartamentos; o modo de aproveitamento mantém o potencial e faz a área média da unidade resultar da quota.'],
     ['5.12.0','Identificação do estudo e interoperabilidade por CSV. A barra lateral recebe campo livre para nome, código ou referência do projeto/terreno, preservado ao aplicar cenários pré-definidos e exibido no relatório e no memorial. O salvamento/carregamento externo deixa de usar JSON e passa a usar CSV plano: a primeira coluna é a identificação, cada controle do painel ocupa sua própria coluna e os principais resultados são anexados ao fim da linha. A exportação usa ponto e vírgula e BOM UTF-8 para compatibilidade com Excel em português; a importação aceita ponto e vírgula, vírgula ou tabulação e alerta quando o arquivo foi gerado por outra versão do modelo.'],    ['5.11.2','Fachada cega na divisa passa a ser exclusiva de torre única. Ao selecionar dois ou mais blocos, as opções esquerda/direita são desmarcadas antes do cálculo e ficam visualmente indisponíveis; ao retornar para uma torre, tornam-se editáveis novamente sem restaurar marcações antigas. A leitura dos parâmetros também força a dispensa lateral a falso em múltiplas torres, protegendo importações e presets legados.'],
@@ -6104,10 +6164,12 @@ function constantesVigentes(p, R){
   aplic.push(['Divisor do coeficiente', p.aeis?'1,00 — AEIS-1 incide sobre a área bruta'
        :(p.lei?p.brutaComp.toFixed(2)+' — relação bruta/computável':'1,70 — fixado pelo PL 574/2025')]);
   aplic.push(['Relação bruta / privativa (vendável)', p.brutaPriv.toFixed(2)]);
-  put(temODC,'VL — fator do valor do terreno na ODC',
+  put(p.poderPublico,'Empreendimento do poder público',
+      'ODC suspensa; TDC sem desembolso; premissa provisória: sem aquisição onerosa de UR e sem AMIS',null);
+  put(temODC&&!p.poderPublico,'VL — fator do valor do terreno na ODC',
       p.VL.toFixed(2)+'  (sugerido: 0,25 em OP-3; 0,50 nas demais)',
-      'ODC nula neste cenário — as isenções e a TDC absorvem toda a área onerável');
-  put(temODC,'Parcelamento da ODC',
+      p.poderPublico?'ODC suspensa para empreendimento do poder público':'ODC nula neste cenário — as isenções e a TDC absorvem toda a área onerável');
+  put(temODC&&!p.poderPublico,'Parcelamento da ODC',
       p.odcAvista?'à vista, com desconto de 30%':p.odcParc+' parcelas mensais a partir do início da obra', null);
   put(gerador,'Fator de redução (Anexo III)',
       (FR[p.tipo]||FR[7]).map(v=>v.toLocaleString('pt-BR')).join(' / ')+'  [≤2 / 2–4 / 4–6 anos]',
@@ -6123,9 +6185,9 @@ function constantesVigentes(p, R){
       'aplicável apenas na OUS');
   put(R&&R.autoAplica,'Regime da superação em Subárea 1A/1B',
       'autoaplicação — sem despesa de aquisição nem receita de alienação', null);
-  put(p.adere&&limAMIS!=null,'Limiar de dispensa da AMIS', limAMIS+'% de superação via UR',
+  put(p.adere&&limAMIS!=null&&!p.poderPublico,'Limiar de dispensa da AMIS', limAMIS+'% de superação via UR',
       p.adere?'empreendimento incentivado em Subárea 1A/1B — isento de AMIS':'AMIS não incide fora da OUS');
-  put(receptor,'Acréscimo do Fundo sobre a UR adquirida',(p.pFundo*100).toFixed(0)+'%',null);
+  put(receptor&&!p.poderPublico,'Acréscimo do Fundo sobre a UR adquirida',(p.pFundo*100).toFixed(0)+'%',null);
   put(regimeHIS,'Exigências de HIS (Lei 11.181/2019)',
       'HIS-1 ≥ 49% · HIS-2 ≥ 21% (abatível pelo excedente de HIS-1) · HIS-1.1 ≥ 24,5%'
       +((R&&R.centralidade)?' · em centralidade, HIS-2.1 ≥ 30% do HIS-2 exigido':''),
@@ -6931,6 +6993,28 @@ function rodarTestes(){
       eq(oc1.odc,oc2.odc)&&oc2.flow.vplProj>oc1.flow.vplProj,'mesmo valor, VPL maior em 60x');
     T('11. Bloco 4','Reconciliação DRE × fluxo preservada com cronogramas alterados',
       Math.round(oc2.reconc),Math.abs(oc2.reconc)<1,0);
+    // ---------- 11B. Empreendimento do poder público (5.15.0) ----------
+    { const ppLei=_cenarioTeste({__modo:'lei',zona:'OM-2',poderPublico:'1',pctCA:'100',pTDC:'10',AFP:'0',faModo:'0'}).A;
+      T('11B. Poder público','ODC é zero em empreendimento do poder público (Lei)',
+        Math.round(ppLei.odc),eq(ppLei.odc,0)&&ppLei.odcCalculada>=0,0);
+      T('11B. Poder público','TDC não gera desembolso em empreendimento do poder público',
+        Math.round(ppLei.tdc),eq(ppLei.tdc,0),0);
+    }
+    { const ppRec=_cenarioTeste({__modo:'ous',cenario:'OUS – Área 2',zona:'OP-3',tipo:'7',poderPublico:'1',supUR:'30',testada:'60',profund:'80'}).A;
+      T('11B. Poder público','Receptor público exerce superação sem despesa de aquisição de UR',
+        `AER ${Math.round(ppRec.AER)} · despesa ${Math.round(ppRec.urDesp)}`,ppRec.AER>0&&eq(ppRec.urDesp,0),'AER > 0 e despesa 0');
+      T('11B. Poder público','Empreendimento público não paga AMIS na premissa provisória',
+        Math.round(ppRec.amis),eq(ppRec.amis,0)&&ppRec.usarAMIS===false,0);
+    }
+    { const ppG1=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OP-3',tipo:'1',poderPublico:'1',V:'4000'}).A;
+      const ppG2=_cenarioTeste({__modo:'ous',cenario:'OUS – Subárea 1A',zona:'OP-3',tipo:'1',poderPublico:'1',V:'8000'}).A;
+      T('11B. Poder público','Poder público continua gerando UR',Math.round(ppG1.urRec),ppG1.urRec>0,'> 0');
+      T('11B. Poder público','Valor V/ITBI continua afetando a geração de UR',
+        `${Math.round(ppG1.urRec)} → ${Math.round(ppG2.urRec)}`,ppG2.urRec>ppG1.urRec*1.9,'aprox. proporcional a V');
+      const csvPP=montarEstudoCSV(), parsedPP=interpretarEstudoCSV(csvPP.texto);
+      T('11B. Poder público','Checkbox do poder público é persistido no CSV',
+        parsedPP.parametros.poderPublico,parsedPP.parametros.poderPublico==='1','1');
+    }
     // acessibilidade
     _cenarioTeste({});
     const rows=[...document.querySelectorAll('#inputs .row')]
